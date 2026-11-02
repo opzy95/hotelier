@@ -123,7 +123,7 @@ function AvailabilitySearch({
           <button type="submit" className="flex h-10 w-full items-center justify-center gap-2 bg-[#84652e] px-4 text-[8px] font-medium tracking-wide text-white transition-colors hover:bg-forest">
             <Search aria-hidden="true" className="h-3 w-3" /> CHECK AVAILABILITY
           </button>
-          <span className="mt-1 block text-center text-[8px] text-[#718d77]">● Guaranteed Live Rates &amp; Inventory</span>
+          <span className="mt-1 block text-center text-[8px] text-[#718d77]">● Availability preview · rates are estimates</span>
         </div>
       </div>
       {dateError && <p role="alert" className="mt-2 text-[9px] text-red-700">{dateError}</p>}
@@ -292,22 +292,33 @@ export function BookYourStayPage() {
   const defaultCheckIn = searchParams.get('checkin') || today
   const [checkIn, setCheckIn] = useState(defaultCheckIn)
   const [checkOut, setCheckOut] = useState(searchParams.get('checkout') || addDays(defaultCheckIn, 4))
-  const [adults, setAdults] = useState(Number(searchParams.get('adults') || 2))
-  const [children, setChildren] = useState(Number(searchParams.get('children') || 0))
-  const [roomsCount, setRoomsCount] = useState(Number(searchParams.get('rooms') || 1))
+  const initialAdults = Number(searchParams.get('adults') || 2)
+  const initialChildren = Number(searchParams.get('children') || 0)
+  const initialRoomsCount = Number(searchParams.get('rooms') || 1)
+  const [adults, setAdults] = useState(initialAdults)
+  const [children, setChildren] = useState(initialChildren)
+  const [roomsCount, setRoomsCount] = useState(initialRoomsCount)
   const initialRoom = searchParams.get('room')
-  const [selectedRoomId, setSelectedRoomId] = useState(roomSuites.some((room) => room.id === initialRoom) ? initialRoom : '')
+  const initialRoomDetails = roomSuites.find((room) => room.id === initialRoom)
+  const initialGuestCount = initialAdults + initialChildren
+  const [selectedRoomId, setSelectedRoomId] = useState(
+    initialRoomDetails && initialGuestCount <= initialRoomDetails.maxGuests * initialRoomsCount ? initialRoomDetails.id : '',
+  )
   const [hasSearched, setHasSearched] = useState(Boolean(initialRoom))
   const [activeFilter, setActiveFilter] = useState(roomFilters[0])
   const [showGuestDetails, setShowGuestDetails] = useState(false)
   const [guestDetailsSaved, setGuestDetailsSaved] = useState(false)
+  const guestCount = adults + children
   const nights = numberOfNights(checkIn, checkOut)
   const selectedRoom = roomSuites.find((room) => room.id === selectedRoomId)
   const visibleRooms = useMemo(() => {
-    if (activeFilter === 'Lagoon') return roomSuites.filter((room) => room.id !== 'presidential')
-    if (activeFilter === 'Penthouse') return roomSuites.filter((room) => room.id === 'presidential')
-    return roomSuites
-  }, [activeFilter])
+    return roomSuites.filter((room) => {
+      const matchesTier = activeFilter === 'All Tiers'
+        || (activeFilter === 'Lagoon' && room.id !== 'presidential')
+        || (activeFilter === 'Penthouse' && room.id === 'presidential')
+      return matchesTier && guestCount <= room.maxGuests * roomsCount
+    })
+  }, [activeFilter, guestCount, roomsCount])
 
   function handleSearch(values: { checkIn: string; checkOut: string; adults: number; children: number; rooms: number }) {
     setCheckIn(values.checkIn)
@@ -324,6 +335,10 @@ export function BookYourStayPage() {
     nextParams.set('adults', String(values.adults))
     nextParams.set('children', String(values.children))
     nextParams.set('rooms', String(values.rooms))
+    if (selectedRoom && values.adults + values.children > selectedRoom.maxGuests * values.rooms) {
+      setSelectedRoomId('')
+      nextParams.delete('room')
+    }
     setSearchParams(nextParams, { replace: true })
     requestAnimationFrame(() => document.getElementById('available-stays')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   }
@@ -381,7 +396,7 @@ export function BookYourStayPage() {
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <h2 className="font-display text-[22px] leading-tight text-ink">Available Sanctuaries &amp; Suites</h2>
-                  <p className="mt-1 text-[8px] text-muted">Showing options for {displayDate(checkIn)} – {displayDate(checkOut)} ({nights} night{nights === 1 ? '' : 's'})</p>
+                  <p className="mt-1 text-[8px] text-muted">Showing options for {displayDate(checkIn)} – {displayDate(checkOut)} ({nights} night{nights === 1 ? '' : 's'}) · {guestCount} guest{guestCount === 1 ? '' : 's'} across {roomsCount} room{roomsCount === 1 ? '' : 's'}</p>
                 </div>
                 <div className="flex flex-wrap gap-1.5" aria-label="Filter by room type">
                   {roomFilters.map((filter) => <button key={filter} type="button" aria-pressed={activeFilter === filter} onClick={() => setActiveFilter(filter)} className={`min-h-7 border px-2.5 text-[7px] font-medium tracking-wide ${activeFilter === filter ? 'border-[#94713a] bg-white text-[#795a27]' : 'border-[#e4e0d7] bg-transparent text-muted hover:bg-white'}`}>{filter.toUpperCase()}</button>)}
@@ -393,7 +408,11 @@ export function BookYourStayPage() {
               </p>
 
               <div className="space-y-3">
-                {visibleRooms.map((room) => <StayCard key={room.id} room={room} selected={selectedRoomId === room.id} onSelect={() => selectRoom(room.id)} />)}
+                {visibleRooms.length > 0 ? visibleRooms.map((room) => <StayCard key={room.id} room={room} selected={selectedRoomId === room.id} onSelect={() => selectRoom(room.id)} />) : (
+                  <p role="status" className="border border-[#e9e6df] bg-white px-5 py-6 text-[10px] leading-[1.7] text-muted">
+                    No sanctuaries fit {guestCount} guests across {roomsCount} room{roomsCount === 1 ? '' : 's'}. Increase the sanctuary count or adjust the guest allocation to see suitable options.
+                  </p>
+                )}
               </div>
             </div>
 
