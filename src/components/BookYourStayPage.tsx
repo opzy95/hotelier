@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   ArrowRight,
+  ArrowLeft,
   BedDouble,
   CalendarDays,
   Check,
@@ -10,11 +11,13 @@ import {
   Clock3,
   ConciergeBell,
   LockKeyhole,
+  Plus,
   Search,
   ShieldCheck,
   Sparkles,
   Users,
   Waves,
+  X,
 } from 'lucide-react'
 import { roomSuites } from '../data/roomSuites'
 import heroImage from '../img/Opzy Luxury Hotel infinity lagoon pool at twilight in Victoria Island.png'
@@ -235,30 +238,119 @@ function BookingSummary({
   )
 }
 
-function GuestDetailsForm({ onDone }: { onDone: () => void }) {
+function GuestDetailsForm({
+  onBack,
+  selectedRoom,
+  checkIn,
+  checkOut,
+  nights,
+  adults,
+  children,
+  roomsCount,
+}: {
+  onBack: () => void
+  selectedRoom: (typeof roomSuites)[number] | undefined
+  checkIn: string
+  checkOut: string
+  nights: number
+  adults: number
+  children: number
+  roomsCount: number
+}) {
   const [saved, setSaved] = useState(false)
+  const [additionalGuests, setAdditionalGuests] = useState<number[]>([])
+  const [nextGuestId, setNextGuestId] = useState(1)
 
   function submitDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setSaved(true)
-    onDone()
   }
 
   return (
-    <form onSubmit={submitDetails} className="mt-4 border border-[#e9e6df] bg-white p-4 sm:p-5">
-      <p className="text-[8px] font-medium tracking-[0.13em] text-[#94713a]">NEXT STEP · GUEST DETAILS</p>
-      <h2 className="mt-1 font-display text-[21px] text-ink">Who is staying?</h2>
-      <p className="mt-1 text-[9px] leading-[1.6] text-muted">Add the lead guest’s details for this reservation.</p>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <label className="text-[8px] font-medium text-ink">FULL NAME<input required autoComplete="name" className="mt-1 block h-9 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[10px] font-normal outline-none focus:border-[#94713a]" /></label>
-        <label className="text-[8px] font-medium text-ink">EMAIL ADDRESS<input required type="email" autoComplete="email" className="mt-1 block h-9 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[10px] font-normal outline-none focus:border-[#94713a]" /></label>
-        <label className="text-[8px] font-medium text-ink sm:col-span-2">PHONE NUMBER<input required type="tel" autoComplete="tel" className="mt-1 block h-9 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[10px] font-normal outline-none focus:border-[#94713a]" /></label>
+    <section className="bg-paper px-5 pb-14 pt-5 sm:px-8 sm:pb-16 lg:px-10">
+      <div className="mx-auto max-w-[1120px]">
+        <ol aria-label="Reservation progress" className="mb-8 grid grid-cols-5 border-b border-[#e9e6df] pb-4 text-center text-[7px] tracking-wide sm:text-[8px]">
+          {['Check Availability', 'Guest Details', 'Booking Review', 'Payment', 'Confirmation'].map((step, index) => <li key={step} aria-current={index === 1 ? 'step' : undefined} className={index === 1 ? 'font-semibold text-ink' : index === 0 ? 'text-[#94713a]' : 'text-[#a5a49d]'}><span className={`mx-auto mb-1.5 flex h-6 w-6 items-center justify-center border ${index < 2 ? 'border-forest bg-forest text-white' : 'border-[#e3e1da] bg-[#f0efeb] text-[#9b9a93]'}`}>{index === 0 ? <Check aria-hidden="true" className="h-3 w-3" /> : `0${index + 1}`}</span>{step}</li>)}
+        </ol>
+
+        <div className="mb-6">
+          <p className="text-[8px] font-medium tracking-[0.13em] text-[#94713a]">RESERVATION STEP 02</p>
+          <h1 className="mt-2 font-display text-[27px] leading-tight text-ink sm:text-[32px]">Guest Information</h1>
+          <p className="mt-1 text-[9px] leading-[1.6] text-muted">Please provide your details to complete your reservation.</p>
+          <div className="mt-4 flex max-w-[720px] gap-2 border border-[#eee2cc] bg-white p-3 text-[8px] leading-[1.6] text-muted">
+            <ShieldCheck aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#94713a]" />
+            <p><strong className="block text-[7px] tracking-[0.1em] text-ink">DISCREET HOSPITALITY PROTOCOL GUARANTEED</strong>Your information will only be used to process and manage your reservation. Personal and financial records are held under strict non-disclosure compliance.</p>
+          </div>
+        </div>
+
+        <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(270px,0.9fr)]">
+          <form onSubmit={submitDetails} className="space-y-4">
+            <section className="border border-[#e9e6df] bg-white p-4 sm:p-5">
+              <div className="flex items-start justify-between gap-3 border-b border-[#efede8] pb-3">
+                <div><h2 className="font-display text-[17px] text-ink">Primary Guest Details</h2><p className="mt-1 text-[8px] text-muted">Please enter the details of the main reservation holder.</p></div>
+                <span className="bg-[#fbf6ed] px-2 py-1 text-[7px] tracking-wide text-[#84652e]">Primary Contact</span>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink">TITLE / SALUTATION <span className="text-red-700">*</span><select required defaultValue="" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]"><option value="" disabled>Select title</option><option>Mr.</option><option>Mrs.</option><option>Ms.</option><option>Dr.</option><option>Chief</option></select></label>
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink">FIRST NAME <span className="text-red-700">*</span><input required autoComplete="given-name" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" /></label>
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">LAST NAME <span className="text-red-700">*</span><input required autoComplete="family-name" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" /></label>
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">EMAIL ADDRESS <span className="text-red-700">*</span><input required type="email" autoComplete="email" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" /><span className="mt-1 block text-[7px] font-normal tracking-normal text-muted">Your encrypted sanctuary confirmation and itinerary will be dispatched here.</span></label>
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">PHONE NUMBER <span className="text-red-700">*</span><input required type="tel" autoComplete="tel" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" /></label>
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">COUNTRY OF RESIDENCE <span className="text-red-700">*</span><select required defaultValue="Nigeria" autoComplete="country-name" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]"><option>Nigeria</option><option>United Kingdom</option><option>United States</option><option>Other</option></select></label>
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">ADDRESS / CITY<input autoComplete="street-address" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" /></label>
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">ESTIMATED ARRIVAL TIME<select defaultValue="Standard Check-in (15:00 - 18:00 WAT)" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]"><option>Standard Check-in (15:00 - 18:00 WAT)</option><option>After 18:00 WAT</option><option>Early arrival request</option></select></label>
+                <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">SPECIAL REQUESTS &amp; PREFERENCES<textarea rows={3} className="mt-1 block w-full resize-y border border-[#dedbd3] bg-[#faf9f6] px-2 py-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" placeholder="Let us know if you have any special requirements for your stay." /><span className="mt-1 block text-[7px] font-normal tracking-normal text-muted">Special requests are subject to availability upon check-in.</span></label>
+              </div>
+            </section>
+
+            <section className="border border-[#e9e6df] bg-white p-4 sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#efede8] pb-3">
+                <div><h2 className="font-display text-[17px] text-ink">Additional Guest Information</h2><p className="mt-1 text-[8px] text-muted">Accompanying guest{additionalGuests.length === 1 ? '' : 's'} (up to {Math.max(adults - 1, 0)} additional adult{adults === 2 ? '' : 's'} in your party)</p></div>
+                <span className="bg-[#f1f0ec] px-2 py-1 text-[7px] tracking-wide text-muted">Optional</span>
+              </div>
+              <div className="mt-4 space-y-4">
+                {additionalGuests.map((guestId, index) => <div key={guestId} className="border-b border-[#efede8] pb-4 last:border-0 last:pb-0">
+                  <div className="mb-3 flex items-center justify-between"><h3 className="text-[8px] font-medium tracking-wide text-ink">ADDITIONAL GUEST {String(index + 1).padStart(2, '0')}</h3><button type="button" aria-label={`Remove additional guest ${index + 1}`} onClick={() => setAdditionalGuests((guests) => guests.filter((id) => id !== guestId))} className="inline-flex min-h-7 items-center gap-1 px-2 text-[7px] text-muted hover:text-red-700"><X aria-hidden="true" className="h-3 w-3" /> Remove</button></div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="text-[7px] font-medium tracking-[0.1em] text-ink">TITLE<select required defaultValue="" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]"><option value="" disabled>Select title</option><option>Mr.</option><option>Mrs.</option><option>Ms.</option><option>Dr.</option><option>Chief</option></select></label>
+                    <label className="text-[7px] font-medium tracking-[0.1em] text-ink">FIRST NAME<input required autoComplete="off" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" /></label>
+                    <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">LAST NAME<input required autoComplete="off" className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" /></label>
+                    <label className="text-[7px] font-medium tracking-[0.1em] text-ink sm:col-span-2">DIETARY OR CULINARY NOTES<input className="mt-1 block h-8 w-full border border-[#dedbd3] bg-[#faf9f6] px-2 text-[9px] font-normal tracking-normal outline-none focus:border-[#94713a]" placeholder="e.g., Pescatarian, shellfish allergy" /></label>
+                  </div>
+                </div>)}
+              </div>
+              {additionalGuests.length < Math.max(adults - 1, 0) && <button type="button" onClick={() => {
+                setAdditionalGuests((guests) => [...guests, nextGuestId])
+                setNextGuestId((id) => id + 1)
+              }} className="mt-4 inline-flex min-h-8 items-center gap-2 border border-[#d8d5cc] px-3 text-[8px] font-medium tracking-wide text-ink hover:border-[#94713a] hover:text-[#84652e]"><Plus aria-hidden="true" className="h-3 w-3" /> ADD ANOTHER GUEST</button>}
+              {adults < 2 && <p className="mt-3 text-[8px] text-muted">To add accompanying adults, update the adult count in your booking details.</p>}
+            </section>
+
+            <section className="space-y-2 border border-[#e9e6df] bg-white p-4 text-[8px] leading-[1.6] text-muted">
+              <label className="flex items-start gap-2"><input required type="checkbox" className="mt-0.5 accent-[#0b2117]" /><span>I confirm that the information provided is accurate and I agree to the hotel’s <a href="#booking-terms" className="text-[#84652e] underline">booking terms</a> and <a href="#privacy-policy" className="text-[#84652e] underline">privacy policy</a>.</span></label>
+              <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5 accent-[#0b2117]" /><span>Receive discreet seasonal invitations, private salon events, and curated culinary previews from OPZY LUXURY HOTEL.</span></label>
+            </section>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <button type="button" onClick={onBack} className="inline-flex min-h-9 items-center gap-2 border border-[#a9a79f] px-4 text-[8px] font-medium tracking-wide text-ink hover:bg-white"><ArrowLeft aria-hidden="true" className="h-3 w-3" /> BACK TO BOOKING</button>
+              <button type="submit" className="inline-flex min-h-9 items-center gap-2 bg-[#84652e] px-5 text-[8px] font-medium tracking-wide text-white hover:bg-forest">{saved ? 'GUEST DETAILS SAVED' : 'CONTINUE TO BOOKING REVIEW'} <ArrowRight aria-hidden="true" className="h-3 w-3" /></button>
+            </div>
+            {saved && <p role="status" className="border border-[#d6dfd1] bg-[#f1f5ef] px-4 py-3 text-[9px] leading-[1.6] text-[#54694f]">Guest details saved for this preview. Booking review is the next step.</p>}
+          </form>
+
+          <aside className="border border-[#e5e2dc] bg-white lg:sticky lg:top-5">
+            <div className="flex items-center justify-between gap-3 bg-forest px-4 py-3 text-white"><div><p className="text-[7px] tracking-[0.12em] text-champagne">RESERVATION OVERVIEW</p><h2 className="mt-1 font-display text-[16px]">Your Stay Summary</h2></div><button type="button" onClick={onBack} className="text-[8px] tracking-wide text-champagne underline underline-offset-2">Edit</button></div>
+            <div className="p-3.5">
+              {selectedRoom && <><img src={selectedRoom.image} alt={selectedRoom.imageAlt} className="h-36 w-full object-cover" /><h3 className="mt-3 font-display text-[16px] text-ink">{selectedRoom.fullName}</h3><p className="mt-1 text-[8px] leading-[1.6] text-muted">{selectedRoom.description}</p></>}
+              <div className="mt-4 grid grid-cols-2 gap-3 border-b border-[#eeece6] pb-3"><div><p className="text-[7px] tracking-wide text-muted">CHECK-IN</p><p className="mt-1 text-[9px] font-medium text-ink">{displayDate(checkIn)}</p><p className="mt-1 text-[7px] text-muted">From 15:00</p></div><div className="border-l border-[#eee2cc] pl-3"><p className="text-[7px] tracking-wide text-muted">CHECK-OUT</p><p className="mt-1 text-[9px] font-medium text-ink">{displayDate(checkOut)}</p><p className="mt-1 text-[7px] text-muted">Until 12:00</p></div></div>
+              <dl className="space-y-2 border-b border-[#eeece6] py-3 text-[8px]"><div className="flex justify-between gap-3"><dt className="text-muted">Duration of Stay</dt><dd className="text-ink">{nights} Night{nights === 1 ? '' : 's'}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">Party Size</dt><dd className="text-right text-ink">{adults} Adults, {children} Children</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">Allocated Sanctuaries</dt><dd className="text-ink">{roomsCount} Suite{roomsCount === 1 ? '' : 's'}</dd></div></dl>
+              {selectedRoom && <div className="py-3"><p className="mb-2 text-[7px] font-medium tracking-[0.1em] text-[#94713a]">RATE BREAKDOWN</p><div className="space-y-2 text-[8px]"><div className="flex justify-between gap-3"><span className="text-muted">Standard Nightly Rate</span><span className="text-ink">{formatNaira(selectedRoom.priceValue)}</span></div><div className="flex justify-between gap-3"><span className="text-muted">Accommodation Subtotal ({nights} Nights)</span><span className="text-ink">{formatNaira(selectedRoom.priceValue * nights * roomsCount)}</span></div></div><div className="mt-3 flex items-center justify-between gap-3 border-t border-[#eeece6] pt-3"><span className="font-display text-[15px] text-ink">Total Payable:</span><span className="font-display text-[18px] text-ink">{formatNaira(selectedRoom.priceValue * nights * roomsCount)}</span></div><p className="mt-1 text-right text-[7px] text-muted">Estimated total · NGN</p></div>}
+              <ul className="-mx-3.5 space-y-2 bg-[#f3f1eb] px-3.5 py-3 text-[8px] text-muted"><li className="flex gap-2"><Check aria-hidden="true" className="h-3 w-3 shrink-0 text-[#94713a]" />Free cancellation up to 72 hours prior to arrival</li><li className="flex gap-2"><LockKeyhole aria-hidden="true" className="h-3 w-3 shrink-0 text-[#94713a]" />Direct 256-bit encrypted reservation protocol</li><li className="flex gap-2"><ConciergeBell aria-hidden="true" className="h-3 w-3 shrink-0 text-[#94713a]" />Dedicated concierge support throughout your stay</li></ul>
+            </div>
+          </aside>
+        </div>
       </div>
-      <button type="submit" className="mt-4 flex min-h-10 w-full items-center justify-center gap-2 bg-[#84652e] px-4 text-[8px] font-medium tracking-wide text-white hover:bg-forest">
-        {saved ? 'GUEST DETAILS SAVED' : 'SAVE GUEST DETAILS'} <Check aria-hidden="true" className="h-3 w-3" />
-      </button>
-      {saved && <p role="status" className="mt-3 text-[9px] leading-[1.6] text-[#60745d]">Guest details are saved for this preview. Payment is the next step in the booking flow.</p>}
-    </form>
+    </section>
   )
 }
 
@@ -307,7 +399,6 @@ export function BookYourStayPage() {
   const [hasSearched, setHasSearched] = useState(Boolean(initialRoom))
   const [activeFilter, setActiveFilter] = useState(roomFilters[0])
   const [showGuestDetails, setShowGuestDetails] = useState(false)
-  const [guestDetailsSaved, setGuestDetailsSaved] = useState(false)
   const guestCount = adults + children
   const nights = numberOfNights(checkIn, checkOut)
   const selectedRoom = roomSuites.find((room) => room.id === selectedRoomId)
@@ -328,7 +419,6 @@ export function BookYourStayPage() {
     setRoomsCount(values.rooms)
     setHasSearched(true)
     setShowGuestDetails(false)
-    setGuestDetailsSaved(false)
     const nextParams = new URLSearchParams(searchParams)
     nextParams.set('checkin', values.checkIn)
     nextParams.set('checkout', values.checkOut)
@@ -345,7 +435,6 @@ export function BookYourStayPage() {
 
   function selectRoom(roomId: string) {
     setSelectedRoomId(roomId)
-    setGuestDetailsSaved(false)
     const nextParams = new URLSearchParams(searchParams)
     nextParams.set('room', roomId)
     setSearchParams(nextParams, { replace: true })
@@ -353,6 +442,19 @@ export function BookYourStayPage() {
 
   return (
     <>
+      {showGuestDetails ? (
+        <GuestDetailsForm
+          onBack={() => setShowGuestDetails(false)}
+          selectedRoom={selectedRoom}
+          checkIn={checkIn}
+          checkOut={checkOut}
+          nights={nights}
+          adults={adults}
+          children={children}
+          roomsCount={roomsCount}
+        />
+      ) : (
+        <>
       <section className="relative flex min-h-[370px] items-start justify-center bg-forest-deep pb-24 pt-12 text-center text-white sm:min-h-[395px] sm:pt-14">
         <img src={heroImage} alt="The Opzy waterfront hotel at dusk" className="absolute inset-0 h-full w-full object-cover object-center" />
         <div aria-hidden="true" className="absolute inset-0 bg-[linear-gradient(180deg,rgba(5,20,14,0.72),rgba(5,20,14,0.88)_62%,rgba(5,20,14,0.97))]" />
@@ -418,8 +520,6 @@ export function BookYourStayPage() {
 
             <div className="space-y-4">
               <BookingSummary selectedRoom={selectedRoom} checkIn={checkIn} checkOut={checkOut} nights={nights} adults={adults} children={children} roomsCount={roomsCount} onContinue={() => setShowGuestDetails(true)} />
-              {showGuestDetails && <GuestDetailsForm onDone={() => setGuestDetailsSaved(true)} />}
-              {guestDetailsSaved && <p role="status" className="border border-[#d6dfd1] bg-[#f1f5ef] px-4 py-3 text-[9px] leading-[1.6] text-[#54694f]">Guest details saved for this preview. The next step will connect secure payment and booking confirmation.</p>}
               <div className="flex items-start gap-3 border border-[#e9e6df] bg-[#f3f1eb] p-3.5">
                 <ConciergeBell aria-hidden="true" className="mt-1 h-4 w-4 shrink-0 text-[#94713a]" />
                 <p className="text-[8px] leading-[1.6] text-muted"><strong className="text-ink">Bespoke suite inquiries?</strong><br />Speak directly to the Chief Butler at Victoria Island.<br /><a className="font-medium text-[#94713a]" href="tel:+23418906799">+234 (0) 1 890 OPZY</a></p>
@@ -440,6 +540,8 @@ export function BookYourStayPage() {
       )}
 
       <PrivilegeStrip />
+        </>
+      )}
     </>
   )
 }
