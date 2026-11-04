@@ -6,8 +6,6 @@ import heroImage from '../img/Opzy Luxury Hotel infinity lagoon pool at twilight
 
 function BookingLookup() {
   const [lookupAttempted, setLookupAttempted] = useState(false)
-  const [recoverReference, setRecoverReference] = useState(false)
-
   function handleLookup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setLookupAttempted(true)
@@ -22,15 +20,6 @@ function BookingLookup() {
       </div>
 
       <form onSubmit={handleLookup} className="mt-6 space-y-4">
-        <label className="block">
-          <span className="mb-1.5 flex items-center justify-between gap-2 text-[8px] font-medium tracking-wide text-ink">
-            BOOKING REFERENCE <span className="font-normal normal-case tracking-normal text-[#a2a59e]">Format: OPZ-YYYY-XXXX</span>
-          </span>
-          <span className="flex h-10 items-center gap-2 border border-[#deddd7] bg-[#faf9f6] px-3 focus-within:border-[#94713a]">
-            <KeyRound aria-hidden="true" className="h-3 w-3 shrink-0 text-muted" />
-            <input required name="bookingReference" autoComplete="off" placeholder="OPZ-2026-0000" className="h-full w-full bg-transparent text-[10px] text-ink outline-none placeholder:text-[#b4b5af]" />
-          </span>
-        </label>
         <label className="block">
           <span className="mb-1.5 block text-[8px] font-medium tracking-wide text-ink">RESERVATION EMAIL ADDRESS</span>
           <span className="flex h-10 items-center gap-2 border border-[#deddd7] bg-[#faf9f6] px-3 focus-within:border-[#94713a]">
@@ -49,19 +38,6 @@ function BookingLookup() {
         </p>
       )}
 
-      <div className="mt-5 border-t border-[#eeece6] pt-4 text-center">
-        <p className="text-[9px] text-muted">
-          Forgot your booking reference?{' '}
-          <button type="button" onClick={() => setRecoverReference(!recoverReference)} aria-expanded={recoverReference} className="font-medium text-[#94713a] underline decoration-[#cbbd9e] underline-offset-2 hover:text-ink">
-            {recoverReference ? 'Hide recovery details' : 'Recover it here'}
-          </button>
-        </p>
-        {recoverReference && (
-          <p className="mt-3 text-[10px] leading-[1.6] text-muted">
-            Email <a href="mailto:reservations@opzyluxury.com?subject=Booking%20Reference%20Recovery" className="font-medium text-ink underline underline-offset-2">reservations@opzyluxury.com</a> with the name and email address used for your reservation.
-          </p>
-        )}
-      </div>
     </section>
   )
 }
