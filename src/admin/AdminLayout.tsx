@@ -20,7 +20,7 @@ import { AdminReservationsProvider } from './AdminReservationsContext'
 const primaryNavigation = [
   { label: 'Overview', path: 'overview', icon: LayoutDashboard },
   { label: 'Reservations', path: 'reservations', icon: CalendarDays },
-  { label: 'Rooms', path: 'rooms', icon: BedDouble, meta: '64 Total' },
+  { label: 'Rooms', path: 'rooms', icon: BedDouble, meta: '80 Total' },
   { label: 'Guests', path: 'guests', icon: UsersRound },
   { label: 'Check-in / Check-out', path: 'check-in', icon: DoorOpen, notification: true },
   { label: 'Payments', path: 'payments', icon: CreditCard },

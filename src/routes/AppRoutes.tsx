@@ -18,6 +18,8 @@ import {
 import { AdminLayout, AdminSectionPlaceholder } from '../admin/AdminLayout'
 import { AdminDashboard } from '../admin/AdminDashboard'
 import { AdminReservations } from '../admin/AdminReservations'
+import { AdminRooms } from '../admin/AdminRooms'
+import { AdminGuests } from '../admin/AdminGuests'
 
 function HomePage() {
   return (
@@ -60,6 +62,8 @@ export function AppRoutes() {
         <Route index element={<Navigate to="overview" replace />} />
         <Route path="overview" element={<AdminDashboard />} />
         <Route path="reservations" element={<AdminReservations />} />
+        <Route path="rooms" element={<AdminRooms />} />
+        <Route path="guests" element={<AdminGuests />} />
         <Route path=":section" element={<AdminSectionPlaceholder />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

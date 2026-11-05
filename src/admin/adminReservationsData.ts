@@ -1,4 +1,4 @@
-export type PaymentStatus = 'Paid' | 'Pending' | 'Refunded'
+export type PaymentStatus = 'Paid' | 'Partially Paid' | 'Pending' | 'Refunded'
 export type FolioStatus = 'Confirmed' | 'Checked In' | 'Pending Payment' | 'Cancelled' | 'Checked Out'
 
 export type Reservation = {
@@ -13,6 +13,8 @@ export type Reservation = {
   adults: number
   children: number
   amount: number
+  paidAmount?: number
+  nightlyRate?: number
   payment: PaymentStatus
   folio: FolioStatus
 }
@@ -33,6 +35,14 @@ export const reservationCurrency = new Intl.NumberFormat('en-NG', {
   currency: 'NGN',
   maximumFractionDigits: 0,
 })
+
+export function reservationPaidAmount(reservation: Reservation) {
+  return reservation.paidAmount ?? (reservation.payment === 'Paid' ? reservation.amount : 0)
+}
+
+export function reservationBalanceDue(reservation: Reservation) {
+  return Math.max(0, reservation.amount - reservationPaidAmount(reservation))
+}
 
 export function formatReservationDate(value: string) {
   return new Date(`${value}T12:00:00`).toLocaleDateString('en-GB', {

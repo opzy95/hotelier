@@ -17,11 +17,11 @@ import {
   X,
 } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
-import { reservationCurrency } from './adminReservationsData'
+import { reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
 import type { FolioStatus, PaymentStatus, Reservation } from './adminReservationsData'
 
 const folioOptions: FolioStatus[] = ['Confirmed', 'Checked In', 'Pending Payment', 'Cancelled', 'Checked Out']
-const paymentOptions: PaymentStatus[] = ['Paid', 'Pending', 'Refunded']
+const paymentOptions: PaymentStatus[] = ['Paid', 'Partially Paid', 'Pending', 'Refunded']
 const roomOptions = ['Executive Lagoon Suite', 'Presidential Sanctuary Penthouse', 'Deluxe Lagoon Room', 'Waterfront Villa']
 const today = new Date()
 
@@ -43,6 +43,7 @@ function statusStyle(status: FolioStatus | PaymentStatus) {
     Cancelled: 'border-rose-200 bg-rose-50 text-rose-700',
     'Checked Out': 'border-stone-200 bg-stone-100 text-stone-600',
     Paid: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    'Partially Paid': 'border-amber-200 bg-amber-50 text-amber-900',
     Pending: 'border-amber-200 bg-amber-50 text-amber-800',
     Refunded: 'border-stone-200 bg-stone-100 text-stone-600',
   }
@@ -50,8 +51,8 @@ function statusStyle(status: FolioStatus | PaymentStatus) {
 }
 
 function exportReservations(rows: Reservation[]) {
-  const columns: (keyof Reservation)[] = ['reference', 'guest', 'email', 'phone', 'room', 'checkIn', 'checkOut', 'adults', 'children', 'amount', 'payment', 'folio']
-  const escapeValue = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`
+  const columns: (keyof Reservation)[] = ['reference', 'guest', 'email', 'phone', 'room', 'checkIn', 'checkOut', 'adults', 'children', 'amount', 'paidAmount', 'nightlyRate', 'payment', 'folio']
+  const escapeValue = (value: string | number | undefined) => `"${String(value ?? '').replaceAll('"', '""')}"`
   const content = [
     columns.join(','),
     ...rows.map((reservation) => columns.map((column) => escapeValue(reservation[column])).join(',')),
@@ -236,6 +237,8 @@ function ReservationDetails({ reservation, onClose }: { reservation: Reservation
           <div className="py-3"><dt className="text-[10px] text-muted">Stay dates</dt><dd className="mt-1 text-xs text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Party</dt><dd className="mt-1 text-xs text-ink">{reservation.adults} adults, {reservation.children} children</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Total amount</dt><dd className="mt-1 text-xs text-ink">{reservationCurrency.format(reservation.amount)}</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Amount paid</dt><dd className="mt-1 text-xs text-emerald-800">{reservationCurrency.format(reservationPaidAmount(reservation))}</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Remaining balance</dt><dd className={`mt-1 text-xs font-bold ${reservationBalanceDue(reservation) ? 'text-amber-900' : 'text-ink'}`}>{reservationCurrency.format(reservationBalanceDue(reservation))}</dd></div>
           <div className="py-3 sm:col-span-2"><dt className="text-[10px] text-muted">Payment / folio</dt><dd className="mt-1 text-xs text-ink">{reservation.payment} / {reservation.folio}</dd></div>
         </dl>
       </section>
@@ -273,10 +276,10 @@ export function AdminReservations() {
   const currentPage = Math.min(page, totalPages)
   const visibleRows = filteredRows.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
   const confirmedCount = rows.filter((row) => row.folio === 'Confirmed').length
-  const pendingReservations = rows.filter((row) => row.payment === 'Pending')
+  const pendingReservations = rows.filter((row) => row.payment === 'Pending' || row.payment === 'Partially Paid')
   const cancelledCount = rows.filter((row) => row.folio === 'Cancelled').length
   const checkedInCount = rows.filter((row) => row.folio === 'Checked In').length
-  const pendingAmount = pendingReservations.reduce((total, row) => total + row.amount, 0)
+  const pendingAmount = pendingReservations.reduce((total, row) => total + reservationBalanceDue(row), 0)
   const confirmedPercentage = rows.length ? ((confirmedCount / rows.length) * 100).toFixed(1) : '0.0'
   const cancelledPercentage = rows.length ? ((cancelledCount / rows.length) * 100).toFixed(1) : '0.0'
   function clearFilters() {
@@ -335,7 +338,7 @@ export function AdminReservations() {
           <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">PENDING PAYMENT</span>
           <CircleAlert aria-hidden="true" className="absolute right-4 top-4 size-8 rounded-sm bg-amber-50 p-2 text-amber-700" />
           <strong className="mt-2 block font-display text-2xl text-ink">{pendingReservations.length}</strong>
-          <p className="mt-1 text-[10px] text-muted"><b className="font-semibold text-amber-800">{reservationCurrency.format(pendingAmount)}</b> awaiting payment</p>
+          <p className="mt-1 text-[10px] text-muted"><b className="font-semibold text-amber-800">{reservationCurrency.format(pendingAmount)}</b> outstanding balance</p>
         </article>
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
           <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">CANCELLED</span>
@@ -381,8 +384,8 @@ export function AdminReservations() {
 
       <div className="overflow-hidden rounded-sm border border-stone-200/80 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1050px] border-collapse text-left text-[10px]">
-            <thead className="bg-stone-50 text-[9px] tracking-wide text-muted">
+          <table className="w-full min-w-[1050px] border-collapse text-left text-[12px]">
+            <thead className="bg-stone-50 text-[11px] tracking-wide text-muted">
               <tr>
                 <th scope="col" className="px-3 py-3 font-semibold">BOOKING REFERENCE</th>
                 <th scope="col" className="px-3 py-3 font-semibold">GUEST &amp; DETAILS</th>
@@ -398,17 +401,17 @@ export function AdminReservations() {
             <tbody className="divide-y divide-stone-100">
               {visibleRows.map((reservation) => (
                 <tr key={reservation.reference} className="align-top text-muted hover:bg-paper/60">
-                  <td className="px-3 py-3"><strong className="block whitespace-nowrap text-[10px] text-ink">{reservation.reference}</strong><small className="mt-1 block text-[9px]">Direct · Web channel</small></td>
-                  <td className="px-3 py-3"><strong className="block whitespace-nowrap font-medium text-ink">{reservation.guest}</strong><small className="mt-1 block">{reservation.email}</small>{reservation.tier && <span className="mt-1 inline-block rounded-sm bg-champagne/40 px-1.5 py-0.5 text-[8px] font-semibold text-amber-950">{reservation.tier}</span>}</td>
+                  <td className="px-3 py-3"><strong className="block whitespace-nowrap text-[11px] text-ink">{reservation.reference}</strong><small className="mt-1 block text-[10px]">Direct · Web channel</small></td>
+                  <td className="px-3 py-3"><strong className="block whitespace-nowrap font-medium text-ink">{reservation.guest}</strong><small className="mt-1 block text-[10px]">{reservation.email}</small>{reservation.tier && <span className="mt-1 inline-block rounded-sm bg-champagne/40 px-1.5 py-0.5 text-[9px] font-semibold text-amber-950">{reservation.tier}</span>}</td>
                   <td className="px-3 py-3"><span className="block max-w-[145px] text-ink">{reservation.room}</span></td>
-                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</strong><small className="mt-1 block">{nightsBetween(reservation.checkIn, reservation.checkOut)} nights</small></td>
-                  <td className="whitespace-nowrap px-3 py-3"><strong className="block font-medium text-ink">{reservation.adults} {reservation.adults === 1 ? 'Adult' : 'Adults'}</strong><small className="mt-1 block">{reservation.children} {reservation.children === 1 ? 'Child' : 'Children'}</small></td>
-                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{reservationCurrency.format(reservation.amount)}</strong><small className="mt-1 block">{reservation.payment === 'Pending' ? 'Awaiting payment' : 'Settlement recorded'}</small></td>
-                  <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-medium ${statusStyle(reservation.payment)}`}>{reservation.payment}</span></td>
-                  <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-medium ${statusStyle(reservation.folio)}`}>{reservation.folio}</span></td>
+                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</strong><small className="mt-1 block text-[10px]">{nightsBetween(reservation.checkIn, reservation.checkOut)} nights</small></td>
+                  <td className="whitespace-nowrap px-3 py-3"><strong className="block font-medium text-ink">{reservation.adults} {reservation.adults === 1 ? 'Adult' : 'Adults'}</strong><small className="mt-1 block text-[10px]">{reservation.children} {reservation.children === 1 ? 'Child' : 'Children'}</small></td>
+                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{reservationCurrency.format(reservation.amount)}</strong><small className="mt-1 block text-[10px]">{reservation.payment === 'Pending' ? 'Awaiting payment' : reservation.payment === 'Partially Paid' ? `Paid ${reservationCurrency.format(reservationPaidAmount(reservation))} · Due ${reservationCurrency.format(reservationBalanceDue(reservation))}` : 'Settlement recorded'}</small></td>
+                  <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-medium ${statusStyle(reservation.payment)}`}>{reservation.payment}</span></td>
+                  <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-medium ${statusStyle(reservation.folio)}`}>{reservation.folio}</span></td>
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-1">
-                      <button type="button" onClick={() => setSelectedReservation(reservation)} className="rounded-sm border border-stone-200 px-2 py-1 text-[9px] font-medium text-ink hover:border-forest hover:text-forest">View</button>
+                      <button type="button" onClick={() => setSelectedReservation(reservation)} className="rounded-sm border border-stone-200 px-2 py-1 text-[10px] font-medium text-ink hover:border-forest hover:text-forest">View</button>
                       <button type="button" onClick={() => setSelectedReservation(reservation)} aria-label={`More details for ${reservation.reference}`} className="grid size-7 place-items-center rounded-sm text-muted hover:bg-stone-100"><MoreVertical aria-hidden="true" className="size-3.5" /></button>
                     </div>
                   </td>
@@ -418,7 +421,7 @@ export function AdminReservations() {
             </tbody>
           </table>
         </div>
-        <div className="flex flex-col gap-3 border-t border-stone-100 px-4 py-3 text-[10px] text-muted sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-t border-stone-100 px-4 py-3 text-[11px] text-muted sm:flex-row sm:items-center sm:justify-between">
           <p>Showing <strong className="text-ink">{filteredRows.length ? (currentPage - 1) * rowsPerPage + 1 : 0}–{Math.min(currentPage * rowsPerPage, filteredRows.length)}</strong> of <strong className="text-ink">{filteredRows.length}</strong> reservations</p>
           <nav aria-label="Reservation pages" className="flex items-center gap-1">
             <button type="button" onClick={() => setPage(currentPage - 1)} disabled={currentPage === 1} aria-label="Previous page" className="grid size-7 place-items-center rounded-sm border border-stone-200 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40"><ArrowLeft aria-hidden="true" className="size-3.5" /></button>

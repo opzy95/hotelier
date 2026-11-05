@@ -23,7 +23,7 @@ import {
 } from 'recharts'
 import { Link } from 'react-router-dom'
 import { useAdminReservations } from './AdminReservationsContext'
-import { formatReservationDate, reservationCurrency } from './adminReservationsData'
+import { formatReservationDate, reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
 
 type RevenuePeriod = 'This Week' | 'This Month' | 'This Year'
 type OperationTab = 'Arrivals' | 'Departures'
@@ -294,7 +294,14 @@ export function AdminDashboard() {
                       <td className="whitespace-nowrap px-4 py-3 text-ink">{reservation.guest}<small className="mt-1 block text-[9px] text-muted">{reservation.tier}</small></td>
                       <td className="whitespace-nowrap px-4 py-3">{reservation.room}</td>
                       <td className="whitespace-nowrap px-4 py-3">{formatReservationDate(reservation.checkIn)} – {formatReservationDate(reservation.checkOut)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 font-medium text-ink">{reservationCurrency.format(reservation.amount)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 font-medium text-ink">
+                        {reservationCurrency.format(reservation.amount)}
+                        {reservation.payment === 'Partially Paid' && (
+                          <small className="mt-1 block font-normal text-amber-900">
+                            Paid {reservationCurrency.format(reservationPaidAmount(reservation))} · Due {reservationCurrency.format(reservationBalanceDue(reservation))}
+                          </small>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap px-4 py-3">
                         <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-medium ${reservationStatusClass(reservation.folio)}`}>{reservation.folio}</span>
                       </td>
