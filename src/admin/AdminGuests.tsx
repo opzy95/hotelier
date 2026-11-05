@@ -32,6 +32,7 @@ import {
   reservationPaidAmount,
 } from './adminReservationsData'
 import type { Reservation } from './adminReservationsData'
+import type { Room } from './adminRoomsData'
 
 type GuestTier = 'VIP Butler' | 'VIP Titanium' | 'VIP Guest' | 'Standard Folio' | 'Suites Member'
 
@@ -73,6 +74,7 @@ function createGuests(reservations: Reservation[]): Guest[] {
       email: reservation.email,
       phone: reservation.phone,
       ...metadata,
+      memberSince: reservation.registeredAt ?? metadata.memberSince,
     }]
   })
 }
@@ -105,6 +107,10 @@ function reservationNights(reservation: Reservation) {
   const checkIn = new Date(`${reservation.checkIn}T12:00:00`).getTime()
   const checkOut = new Date(`${reservation.checkOut}T12:00:00`).getTime()
   return Math.max(1, Math.ceil((checkOut - checkIn) / 86400000))
+}
+
+function roomDisplayName(roomId: string | undefined, inventory: Room[]) {
+  return inventory.find((room) => room.id === roomId)?.name ?? (roomId ? `Room ${roomId}` : 'Room not assigned')
 }
 
 function addNightsToDate(date: string, nights: number) {
@@ -276,9 +282,10 @@ function ExtendStayDialog({ reservation, onClose, onSave }: {
   )
 }
 
-function GuestInspector({ guest, reservations, onEdit, onClose, onExtendStay }: {
+function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExtendStay }: {
   guest: Guest
   reservations: Reservation[]
+  inventory: Room[]
   onEdit: () => void
   onClose: () => void
   onExtendStay: () => void
@@ -307,7 +314,7 @@ function GuestInspector({ guest, reservations, onEdit, onClose, onExtendStay }: 
           </div>
           <div className="mt-2 flex flex-wrap gap-1">
             <span className="border border-stone-200 bg-stone-50 px-1.5 py-1 text-[9px] text-stone-700">{guest.id}</span>
-            {activeReservation && <span className="bg-amber-100 px-1.5 py-1 text-[9px] font-semibold text-amber-950">In-House · {activeReservation.room}</span>}
+            {activeReservation && <span className="bg-amber-100 px-1.5 py-1 text-[9px] font-semibold text-amber-950">In-House · {activeReservation.room} · {roomDisplayName(activeReservation.assignedRoomId, inventory)}</span>}
             {!activeReservation && nextReservation && <span className="bg-sky-50 px-1.5 py-1 text-[9px] font-semibold text-sky-900">Upcoming Stay</span>}
             <span className="inline-flex items-center gap-1 bg-amber-50 px-1.5 py-1 text-[9px] text-amber-950"><Crown aria-hidden="true" className="size-2.5" />{guest.tier} Service</span>
           </div>
@@ -345,7 +352,7 @@ function GuestInspector({ guest, reservations, onEdit, onClose, onExtendStay }: 
               {nextReservation ? (
                 <>
                   <strong className="mt-1 block text-[10px] font-medium text-ink">{formatReservationDate(nextReservation.checkIn)} – {formatReservationDate(nextReservation.checkOut)}</strong>
-                  <span className="mt-1 block truncate text-[9px] text-muted">{nextReservation.room}</span>
+                  <span className="mt-1 block truncate text-[9px] text-muted">{nextReservation.room} · {roomDisplayName(nextReservation.assignedRoomId, inventory)}</span>
                 </>
               ) : <span className="mt-1 block text-[9px] text-muted">No upcoming stay</span>}
             </div>
@@ -365,7 +372,7 @@ function GuestInspector({ guest, reservations, onEdit, onClose, onExtendStay }: 
                     <strong className="text-[10px] font-semibold text-ink">{reservation.reference}</strong>
                     <span className={`shrink-0 px-1.5 py-0.5 text-[9px] ${reservation.folio === 'Checked In' ? 'bg-amber-50 text-amber-900' : reservation.folio === 'Cancelled' ? 'bg-rose-50 text-rose-800' : 'bg-stone-100 text-stone-600'}`}>{reservation.folio}</span>
                   </div>
-                  <p className="mt-1 text-[10px] text-ink">{reservation.room} · {formatReservationDate(reservation.checkIn)} – {formatReservationDate(reservation.checkOut)}</p>
+                  <p className="mt-1 text-[10px] text-ink">{reservation.room} · {roomDisplayName(reservation.assignedRoomId, inventory)} · {formatReservationDate(reservation.checkIn)} – {formatReservationDate(reservation.checkOut)}</p>
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[9px]">
                     <span>Paid {reservationCurrency.format(reservationPaidAmount(reservation))}</span>
                     <span className="border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-950">Remaining balance: {reservationCurrency.format(reservationBalanceDue(reservation))}</span>
@@ -391,7 +398,7 @@ function GuestInspector({ guest, reservations, onEdit, onClose, onExtendStay }: 
 }
 
 export function AdminGuests() {
-  const { reservations, setReservations } = useAdminReservations()
+  const { reservations, setReservations, rooms } = useAdminReservations()
   const [currentMonth] = useState(() => new Date().toISOString().slice(0, 7))
   const [guests, setGuests] = useState(() => createGuests(reservations))
   const [selectedId, setSelectedId] = useState(guests[0]?.id ?? '')
@@ -403,15 +410,22 @@ export function AdminGuests() {
   const [page, setPage] = useState(1)
   const [dialog, setDialog] = useState<'add' | 'edit' | 'extend' | null>(null)
 
-  const selectedGuest = guests.find((guest) => guest.id === selectedId)
+  const registeredGuests = useMemo(() => {
+    const reservationGuests = createGuests(reservations)
+    const emails = new Set(guests.map((guest) => guest.email.toLowerCase()))
+    const additions = reservationGuests.filter((guest) => !emails.has(guest.email.toLowerCase()))
+    return additions.length ? [...guests, ...additions] : guests
+  }, [guests, reservations])
+
+  const selectedGuest = registeredGuests.find((guest) => guest.id === selectedId)
   const selectedInHouseReservation = selectedGuest
     ? reservations.find((reservation) => reservation.email.toLowerCase() === selectedGuest.email.toLowerCase() && reservation.folio === 'Checked In')
     : undefined
-  const returningCount = guests.filter((guest) => guest.returning).length
-  const inHouseCount = guests.filter((guest) => guestStatus(reservations.filter((reservation) => reservation.email.toLowerCase() === guest.email.toLowerCase())) === 'In-House').length
-  const newThisMonth = guests.filter((guest) => guest.memberSince.slice(0, 7) === currentMonth).length
+  const returningCount = registeredGuests.filter((guest) => guest.returning).length
+  const inHouseCount = registeredGuests.filter((guest) => guestStatus(reservations.filter((reservation) => reservation.email.toLowerCase() === guest.email.toLowerCase())) === 'In-House').length
+  const newThisMonth = registeredGuests.filter((guest) => guest.memberSince.slice(0, 7) === currentMonth).length
 
-  const filteredGuests = useMemo(() => guests.filter((guest) => {
+  const filteredGuests = useMemo(() => registeredGuests.filter((guest) => {
     const relatedReservations = reservations.filter((reservation) => reservation.email.toLowerCase() === guest.email.toLowerCase())
     const status = guestStatus(relatedReservations)
     const searchValue = `${guest.id} ${guest.name} ${guest.email} ${guest.phone}`.toLowerCase()
@@ -420,7 +434,7 @@ export function AdminGuests() {
       && (countryFilter === 'All Countries' || guest.country === countryFilter)
       && (dateFilter === 'All Dates' || guest.memberSince.slice(0, 7) === currentMonth)
       && (statusFilter === 'All Statuses' || status === statusFilter)
-  }), [countryFilter, currentMonth, dateFilter, guests, query, reservations, statusFilter, tierFilter])
+  }), [countryFilter, currentMonth, dateFilter, registeredGuests, query, reservations, statusFilter, tierFilter])
 
   const totalPages = Math.max(1, Math.ceil(filteredGuests.length / pageSize))
   const currentPage = Math.min(page, totalPages)
@@ -485,8 +499,8 @@ export function AdminGuests() {
 
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: 'TOTAL GUESTS', value: guests.length.toLocaleString(), note: 'Registered guest profiles across all wings', icon: UsersRound },
-          { label: 'RETURNING GUESTS', value: returningCount.toLocaleString(), note: `${guests.length ? Math.round(returningCount / guests.length * 100) : 0}% guest retention rate`, icon: RefreshCw, change: '+4.2% MoM' },
+          { label: 'TOTAL GUESTS', value: registeredGuests.length.toLocaleString(), note: 'Registered guest profiles across all wings', icon: UsersRound },
+          { label: 'RETURNING GUESTS', value: returningCount.toLocaleString(), note: `${registeredGuests.length ? Math.round(returningCount / registeredGuests.length * 100) : 0}% guest retention rate`, icon: RefreshCw, change: '+4.2% MoM' },
           { label: 'NEW GUESTS THIS MONTH', value: newThisMonth.toLocaleString(), note: 'Joined the OPZY guest registry', icon: UserRound },
           { label: 'CURRENTLY STAYING', value: inHouseCount.toLocaleString(), note: 'Active in-house guests in suites & villas', icon: BedDouble },
         ].map(({ label, value, note, icon: Icon, change }) => (
@@ -539,6 +553,8 @@ export function AdminGuests() {
                   const relatedReservations = reservations.filter((reservation) => reservation.email.toLowerCase() === guest.email.toLowerCase())
                   const status = guestStatus(relatedReservations)
                   const active = selectedId === guest.id
+                  const currentStay = relatedReservations.find((reservation) => reservation.folio === 'Checked In')
+                    ?? relatedReservations.find((reservation) => ['Confirmed', 'Pending Payment'].includes(reservation.folio))
                   return (
                     <tr key={guest.id} onClick={() => setSelectedId(guest.id)} className={`cursor-pointer transition-colors hover:bg-amber-50/40 ${active ? 'bg-amber-50/50' : 'bg-white'}`}>
                       <td className={`border-l-2 px-3 py-2.5 align-top text-[11px] text-stone-600 ${active ? 'border-amber-800' : 'border-transparent'}`}>
@@ -551,6 +567,7 @@ export function AdminGuests() {
                           <span className="min-w-0">
                             <strong className="block text-[12px] font-medium leading-tight text-ink">{guest.name}</strong>
                             <small className="mt-0.5 block truncate text-[10px] text-muted">{guest.tier}</small>
+                            {currentStay && <small className="mt-0.5 block truncate text-[10px] text-muted">{roomDisplayName(currentStay.assignedRoomId, rooms)}</small>}
                           </span>
                         </span>
                       </td>
@@ -585,7 +602,7 @@ export function AdminGuests() {
             </div>
           </footer>
         </section>
-        {selectedGuest && <GuestInspector guest={selectedGuest} reservations={reservations} onEdit={() => setDialog('edit')} onExtendStay={() => setDialog('extend')} onClose={() => setSelectedId('')} />}
+        {selectedGuest && <GuestInspector guest={selectedGuest} reservations={reservations} inventory={rooms} onEdit={() => setDialog('edit')} onExtendStay={() => setDialog('extend')} onClose={() => setSelectedId('')} />}
       </div>
 
       <footer className="mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-stone-200 py-3 text-[9px] text-muted">

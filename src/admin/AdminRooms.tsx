@@ -23,68 +23,15 @@ import {
   X,
 } from 'lucide-react'
 import { roomSuites } from '../data/roomSuites'
-
-type RoomStatus = 'Available' | 'Occupied' | 'Reserved' | 'Cleaning' | 'Maintenance'
-
-type Room = {
-  id: string
-  name: string
-  type: string
-  floor: number
-  area: number
-  rate: number
-  guests: number
-  status: RoomStatus
-  image: string
-  amenities: string[]
-  guest?: string
-  note?: string
-}
-
-const initialRooms: Room[] = [
-  { id: '101', name: 'Room 101', type: 'Deluxe Lagoon Room', floor: 1, area: 45, rate: 380000, guests: 2, status: 'Available', image: roomSuites[0].image, amenities: ['King Bed', 'Lagoon View', 'Starlink WiFi'] },
-  { id: '102', name: 'Room 102', type: 'Deluxe Lagoon Room', floor: 1, area: 45, rate: 380000, guests: 2, status: 'Occupied', image: roomSuites[0].image, amenities: ['King Bed', 'Garden View', 'In-room Dining'], guest: 'Dr. Obinna Okonkwo', note: 'DEPARTS 27 Oct' },
-  { id: '201', name: 'Room 201', type: 'Executive Lagoon Suite', floor: 2, area: 78, rate: 620000, guests: 3, status: 'Available', image: roomSuites[1].image, amenities: ['Private Balcony', '24/7 Butler', 'Soaking Tub'] },
-  { id: '204', name: 'Room 204', type: 'Deluxe Lagoon Room', floor: 2, area: 45, rate: 380000, guests: 2, status: 'Reserved', image: roomSuites[0].image, amenities: ['Lagoon Wing', 'Pre-Arrival Pack'], guest: 'Lord S. Kensington', note: 'ARRIVES 26 Oct (14:00)' },
-  { id: '301', name: 'Room 301', type: 'Executive Lagoon Suite', floor: 3, area: 78, rate: 620000, guests: 3, status: 'Cleaning', image: roomSuites[1].image, amenities: ['Priority Turnaround', 'Sanitization VIP'], note: 'Est. 40 min left' },
-  { id: '402', name: 'Room 402', type: 'Executive Lagoon Suite', floor: 4, area: 84, rate: 620000, guests: 3, status: 'Occupied', image: roomSuites[1].image, amenities: ['Lagoon Terrace', 'Maybach Escort'], guest: 'Chief Adeboye Adeleke', note: 'VIP BUTLER · ASSIGNED' },
-  { id: 'P-A', name: 'Penthouse A', type: 'Presidential Waterfront Sanctuary', floor: 6, area: 160, rate: 1450000, guests: 4, status: 'Occupied', image: roomSuites[2].image, amenities: ['Private Chef', 'Helipad Priority'], guest: 'Dr. Folashade Akinja', note: 'PRIVATE ESCORT ACTIVE' },
-  { id: 'V-02', name: 'Villa 02', type: 'The Lagoon Villa with Private Jetty', floor: 1, area: 280, rate: 2800000, guests: 6, status: 'Maintenance', image: roomSuites[2].image, amenities: ['Private Jetty', 'Max 6 Guests'], note: 'Team Lead: Engineer Musa' },
-]
-
-const additionalStatuses: RoomStatus[] = [
-  ...Array<RoomStatus>(23).fill('Available'),
-  ...Array<RoomStatus>(39).fill('Occupied'),
-  ...Array<RoomStatus>(7).fill('Reserved'),
-  ...Array<RoomStatus>(2).fill('Cleaning'),
-  'Maintenance',
-]
-
-const rooms: Room[] = [
-  ...initialRooms,
-  ...additionalStatuses.map((status, index) => {
-    let number = 103
-    let added = 0
-    while (added < index + 1) {
-      if (!initialRooms.some((room) => room.id === String(number))) added += 1
-      if (added < index + 1) number += 1
-    }
-
-    const suite = roomSuites[index % roomSuites.length]
-    return {
-      id: String(number),
-      name: `Room ${number}`,
-      type: suite.fullName,
-      floor: Math.floor(number / 100),
-      area: [45, 78, 160][index % 3],
-      rate: suite.priceValue,
-      guests: suite.maxGuests,
-      status,
-      image: suite.image,
-      amenities: suite.amenities.slice(0, 2).map((amenity) => amenity.label),
-    }
-  }),
-]
+import { useAdminReservations } from './AdminReservationsContext'
+import {
+  formatReservationDate,
+  reservationBalanceDue,
+  reservationCurrency,
+  reservationPaidAmount,
+} from './adminReservationsData'
+import type { Reservation } from './adminReservationsData'
+import type { Room, RoomStatus } from './adminRoomsData'
 
 const statusDetails: Record<RoomStatus, { color: string; accent: string }> = {
   Available: { color: 'border-emerald-200 bg-emerald-50 text-emerald-800', accent: 'bg-emerald-600' },
@@ -274,8 +221,9 @@ function RoomEditDialog({ room, onClose, onSave }: {
   )
 }
 
-function RoomInspector({ room, onClose, onStatusChange, onEdit }: {
+function RoomInspector({ room, reservation, onClose, onStatusChange, onEdit }: {
   room: Room
+  reservation?: Reservation
   onClose: () => void
   onStatusChange: (status: RoomStatus) => void
   onEdit: () => void
@@ -313,19 +261,27 @@ function RoomInspector({ room, onClose, onStatusChange, onEdit }: {
             ))}
           </div>
         </section>
-        <section className="border border-amber-200 bg-amber-50/70 p-3">
-          <h3 className="flex items-center gap-1.5 text-[10px] font-semibold text-amber-950"><ShieldCheck aria-hidden="true" className="size-3.5" /> PMS Security Lockout Active</h3>
-          <p className="mt-1.5 text-[9px] leading-4 text-amber-950/75">Active guest reservation in-house. Room cannot be manually marked Available without a formal checkout.</p>
-        </section>
+        {room.status === 'Occupied' && (
+          <section className="border border-amber-200 bg-amber-50/70 p-3">
+            <h3 className="flex items-center gap-1.5 text-[10px] font-semibold text-amber-950"><ShieldCheck aria-hidden="true" className="size-3.5" /> PMS Security Lockout Active</h3>
+            <p className="mt-1.5 text-[9px] leading-4 text-amber-950/75">Active guest reservation in-house. Room cannot be manually marked Available without a formal checkout.</p>
+          </section>
+        )}
         {(room.status === 'Occupied' || room.status === 'Reserved') && (
           <section className="bg-paper p-3">
             <h3 className="text-[10px] font-semibold tracking-wide text-ink">STAY FOLIO BREAKDOWN</h3>
             <div className="mt-2 grid grid-cols-2 gap-3 text-[9px]">
-              <span className="text-muted">Check-in<strong className="mt-1 block font-medium text-ink">24 Oct, 15:20</strong></span>
-              <span className="text-muted">Scheduled Check-out<strong className="mt-1 block font-medium text-ink">28 Oct, 12:00</strong></span>
-              <span className="text-muted">Duration<strong className="mt-1 block font-medium text-ink">4 Nights (VIP Tier 1)</strong></span>
-              <span className="text-muted">Total Room Folio<strong className="mt-1 block font-medium text-amber-900">₦{currency.format(room.rate * 4)}.00</strong></span>
+              <span className="text-muted">Check-in<strong className="mt-1 block font-medium text-ink">{reservation ? `${formatReservationDate(reservation.checkIn)} ${reservation.checkIn.slice(0, 4)}` : 'Not recorded'}</strong></span>
+              <span className="text-muted">Scheduled Check-out<strong className="mt-1 block font-medium text-ink">{reservation ? `${formatReservationDate(reservation.checkOut)} ${reservation.checkOut.slice(0, 4)}` : 'Not recorded'}</strong></span>
+              <span className="text-muted">Booking reference<strong className="mt-1 block font-medium text-ink">{reservation?.reference ?? 'Not linked'}</strong></span>
+              <span className="text-muted">Total Room Folio<strong className="mt-1 block font-medium text-amber-900">{reservation ? reservationCurrency.format(reservation.amount) : `₦${currency.format(room.rate * 4)}.00`}</strong></span>
             </div>
+            {reservation && (
+              <div className="mt-2 grid grid-cols-2 gap-3 border-t border-stone-200 pt-2 text-[9px]">
+                <span className="text-muted">Amount paid<strong className="mt-1 block font-medium text-emerald-800">{reservationCurrency.format(reservationPaidAmount(reservation))}</strong></span>
+                <span className="text-muted">Remaining balance<strong className="mt-1 block font-bold text-amber-950">{reservationCurrency.format(reservationBalanceDue(reservation))}</strong></span>
+              </div>
+            )}
             {room.guest && <p className="mt-2 border-t border-stone-200 pt-2 text-[9px] text-muted">Current guest <strong className="font-medium text-ink">{room.guest}</strong></p>}
           </section>
         )}
@@ -365,8 +321,8 @@ function RoomCard({ room, selected, onSelect, onEdit }: { room: Room; selected: 
             </div>
             <span className="shrink-0 bg-stone-100 px-1.5 py-1 text-[9px] text-muted">FLOOR {room.floor}</span>
           </div>
-          {(room.guest || room.note) && (
-            <div className={`mt-2 border px-2 py-1.5 text-[9px] ${room.status === 'Occupied' ? 'border-stone-200 bg-stone-50 text-stone-600' : room.status === 'Cleaning' ? 'border-cyan-200 bg-cyan-50 text-cyan-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+          {(room.status === 'Occupied' || room.status === 'Reserved') && (room.guest || room.note) && (
+            <div className={`mt-2 border px-2 py-1.5 text-[9px] ${room.status === 'Occupied' ? 'border-stone-200 bg-stone-50 text-stone-600' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
               {room.guest && <strong className="block truncate font-medium">{room.guest}</strong>}
               {room.note && <span>{room.note}</span>}
             </div>
@@ -392,7 +348,7 @@ function RoomCard({ room, selected, onSelect, onEdit }: { room: Room; selected: 
 }
 
 export function AdminRooms() {
-  const [roomData, setRoomData] = useState(rooms)
+  const { reservations, rooms: roomData, setRooms: setRoomData } = useAdminReservations()
   const [selectedId, setSelectedId] = useState('402')
   const [search, setSearch] = useState('')
   const [roomType, setRoomType] = useState('All Room Types')
@@ -403,27 +359,45 @@ export function AdminRooms() {
   const [dialog, setDialog] = useState<'room' | 'types' | null>(null)
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null)
 
-  const selectedRoom = roomData.find((room) => room.id === selectedId)
+  const operationalRooms = useMemo(() => roomData.map((room) => {
+    const reservation = reservations.find((item) => (
+      item.assignedRoomId === room.id
+      && ['Checked In', 'Confirmed', 'Pending Payment'].includes(item.folio)
+    ))
+    if (!reservation) return room
+
+    return {
+      ...room,
+      status: reservation.folio === 'Checked In' ? 'Occupied' as const : 'Reserved' as const,
+      guest: reservation.guest,
+      note: reservation.reference,
+    }
+  }), [reservations, roomData])
+  const selectedRoom = operationalRooms.find((room) => room.id === selectedId)
+  const selectedReservation = reservations.find((reservation) => (
+    reservation.assignedRoomId === selectedId
+    && ['Checked In', 'Confirmed', 'Pending Payment'].includes(reservation.folio)
+  ))
   const editingRoom = roomData.find((room) => room.id === editingRoomId)
-  const counts = useMemo(() => roomData.reduce((result, room) => {
+  const counts = useMemo(() => operationalRooms.reduce((result, room) => {
     result[room.status] += 1
     return result
-  }, { Available: 0, Occupied: 0, Reserved: 0, Cleaning: 0, Maintenance: 0 }), [roomData])
+  }, { Available: 0, Occupied: 0, Reserved: 0, Cleaning: 0, Maintenance: 0 }), [operationalRooms])
 
   const filteredRooms = useMemo(() => {
     const query = search.trim().toLowerCase()
-    return roomData.filter((room) => (
+    return operationalRooms.filter((room) => (
       (!query || `${room.name} ${room.type} ${room.id}`.toLowerCase().includes(query))
       && (roomType === 'All Room Types' || room.type === roomType)
       && (statusFilter === 'All Statuses' || room.status === statusFilter)
       && (floorFilter === 'All Floors' || room.floor === Number(floorFilter))
     ))
-  }, [floorFilter, roomData, roomType, search, statusFilter])
+  }, [floorFilter, operationalRooms, roomType, search, statusFilter])
 
   const totalPages = Math.max(1, Math.ceil(filteredRooms.length / pageSize))
   const currentPage = Math.min(page, totalPages)
   const visibleRooms = filteredRooms.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  const roomTypes = [...new Set(roomData.map((room) => room.type))]
+  const roomTypes = [...new Set(operationalRooms.map((room) => room.type))]
 
   function changeFilter(setter: (value: string) => void, value: string) {
     setter(value)
@@ -449,7 +423,7 @@ export function AdminRooms() {
 
   function editRoom(room: Room) {
     setSelectedId(room.id)
-    setEditingRoomId(room.id)
+    setEditingRoomId(roomData.find((item) => item.id === room.id)?.id ?? null)
   }
 
   const selectClass = 'h-9 min-w-0 border border-stone-200 bg-stone-50 px-2 text-[10px] text-ink outline-none focus:border-amber-800'
@@ -567,7 +541,7 @@ export function AdminRooms() {
             </div>
           )}
         </div>
-        {selectedRoom && <RoomInspector room={selectedRoom} onClose={() => setSelectedId('')} onStatusChange={updateSelectedStatus} onEdit={() => editRoom(selectedRoom)} />}
+        {selectedRoom && <RoomInspector room={selectedRoom} reservation={selectedReservation} onClose={() => setSelectedId('')} onStatusChange={updateSelectedStatus} onEdit={() => editRoom(selectedRoom)} />}
       </div>
 
       <footer className="mt-4 flex flex-col gap-3 border border-stone-200 bg-white px-3 py-3 text-[9px] text-muted sm:flex-row sm:items-center sm:justify-between">

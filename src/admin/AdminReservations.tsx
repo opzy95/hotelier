@@ -19,11 +19,36 @@ import {
 import { useAdminReservations } from './AdminReservationsContext'
 import { reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
 import type { FolioStatus, PaymentStatus, Reservation } from './adminReservationsData'
+import type { Room } from './adminRoomsData'
 
 const folioOptions: FolioStatus[] = ['Confirmed', 'Checked In', 'Pending Payment', 'Cancelled', 'Checked Out']
 const paymentOptions: PaymentStatus[] = ['Paid', 'Partially Paid', 'Pending', 'Refunded']
-const roomOptions = ['Executive Lagoon Suite', 'Presidential Sanctuary Penthouse', 'Deluxe Lagoon Room', 'Waterfront Villa']
+const defaultRoomOptions = ['Executive Lagoon Suite', 'Presidential Sanctuary Penthouse', 'Deluxe Lagoon Room', 'Waterfront Villa']
 const today = new Date()
+
+function inventoryTypeMatches(room: Room, roomType: string) {
+  if (roomType === 'Presidential Sanctuary Penthouse') return room.type.toLowerCase().includes('presidential')
+  if (roomType === 'Waterfront Villa') return room.type.toLowerCase().includes('villa')
+  return room.type === roomType
+}
+
+function getAvailableRooms(roomType: string, checkIn: string, checkOut: string, reservations: Reservation[], inventory: Room[]) {
+  return inventory.filter((room) => (
+    room.status === 'Available'
+    && inventoryTypeMatches(room, roomType)
+    && !reservations.some((reservation) => (
+      reservation.assignedRoomId === room.id
+      && reservation.folio !== 'Cancelled'
+      && reservation.folio !== 'Checked Out'
+      && checkIn < reservation.checkOut
+      && reservation.checkIn < checkOut
+    ))
+  ))
+}
+
+function roomDisplayName(roomId: string | undefined, inventory: Room[]) {
+  return inventory.find((room) => room.id === roomId)?.name ?? (roomId ? `Room ${roomId}` : 'Room not assigned')
+}
 
 function nightsBetween(checkIn: string, checkOut: string) {
   if (!checkIn || !checkOut) return 1
@@ -51,7 +76,7 @@ function statusStyle(status: FolioStatus | PaymentStatus) {
 }
 
 function exportReservations(rows: Reservation[]) {
-  const columns: (keyof Reservation)[] = ['reference', 'guest', 'email', 'phone', 'room', 'checkIn', 'checkOut', 'adults', 'children', 'amount', 'paidAmount', 'nightlyRate', 'payment', 'folio']
+  const columns: (keyof Reservation)[] = ['reference', 'guest', 'email', 'phone', 'room', 'assignedRoomId', 'checkIn', 'checkOut', 'adults', 'children', 'amount', 'paidAmount', 'nightlyRate', 'payment', 'folio']
   const escapeValue = (value: string | number | undefined) => `"${String(value ?? '').replaceAll('"', '""')}"`
   const content = [
     columns.join(','),
@@ -65,24 +90,50 @@ function exportReservations(rows: Reservation[]) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function ReservationDialog({ onClose, onCreate }: {
+function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
   onClose: () => void
   onCreate: (reservation: Reservation) => void
+  reservations: Reservation[]
+  inventory: Room[]
 }) {
   const [step, setStep] = useState(0)
-  const [room, setRoom] = useState(roomOptions[0])
+  const [roomOptions] = useState(() => [...new Set([...defaultRoomOptions, ...inventory.map((item) => item.type)])])
+  const [room, setRoom] = useState('Deluxe Lagoon Room')
   const [checkIn, setCheckIn] = useState('')
   const [checkOut, setCheckOut] = useState('')
+  const [assignedRoomId, setAssignedRoomId] = useState('')
+  const [formError, setFormError] = useState('')
+  const [amountReceived, setAmountReceived] = useState('0')
   const [adults, setAdults] = useState('2')
   const [children, setChildren] = useState('0')
   const [guestName, setGuestName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const nights = nightsBetween(checkIn, checkOut)
+  const availableRooms = getAvailableRooms(room, checkIn, checkOut, reservations, inventory)
+  const selectedRoom = availableRooms.find((availableRoom) => availableRoom.id === assignedRoomId)
+  const nightlyRate = selectedRoom?.rate ?? inventory.find((availableRoom) => inventoryTypeMatches(availableRoom, room))?.rate ?? 0
+  const totalAmount = nightlyRate * nights
+  const paidAmount = Math.min(totalAmount, Math.max(0, Number(amountReceived) || 0))
+  const balanceDue = totalAmount - paidAmount
+  const payment: PaymentStatus = paidAmount === 0 ? 'Pending' : paidAmount >= totalAmount ? 'Paid' : 'Partially Paid'
 
   function submitReservation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if ((step === 0 || step === 2) && (!checkIn || !checkOut || checkOut <= checkIn)) {
+      setFormError('Choose a valid check-in and check-out date. Check-out must be after check-in.')
+      return
+    }
+    if ((step === 0 || step === 2) && !availableRooms.some((availableRoom) => availableRoom.id === assignedRoomId)) {
+      setFormError('Choose an available room for the selected dates before continuing.')
+      return
+    }
+    if (step === 2 && Number(amountReceived) > totalAmount) {
+      setFormError('The amount received cannot be greater than the reservation total.')
+      return
+    }
     if (step < 2) {
+      setFormError('')
       setStep((current) => current + 1)
       return
     }
@@ -94,13 +145,17 @@ function ReservationDialog({ onClose, onCreate }: {
       phone: phone.trim(),
       tier: '',
       room,
+      assignedRoomId,
+      registeredAt: new Date().toISOString().slice(0, 10),
       checkIn,
       checkOut,
       adults: Number(adults),
       children: Number(children),
-      amount: nights * (room.includes('Presidential') ? 1450000 : room.includes('Villa') ? 925000 : room.includes('Executive') ? 620000 : 380000),
-      payment: 'Pending',
-      folio: 'Pending Payment',
+      amount: totalAmount,
+      paidAmount,
+      nightlyRate,
+      payment,
+      folio: payment === 'Pending' ? 'Pending Payment' : 'Confirmed',
     })
   }
 
@@ -145,18 +200,31 @@ function ReservationDialog({ onClose, onCreate }: {
                 <label className="block text-[10px] font-semibold tracking-wide text-ink">
                   SELECT SANCTUARY / SUITE <span className="text-rose-600">*</span>
                   <span className="relative block">
-                    <select className={fieldClass} value={room} onChange={(event) => setRoom(event.target.value)} required>
+                    <select className={fieldClass} value={room} onChange={(event) => { setRoom(event.target.value); setAssignedRoomId(''); setFormError('') }} required>
                       {roomOptions.map((option) => <option key={option}>{option}</option>)}
                     </select>
                     <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" />
                   </span>
                 </label>
+                <label className="block text-[10px] font-semibold tracking-wide text-ink">
+                  ASSIGN ROOM <span className="text-rose-600">*</span>
+                  <span className="relative block">
+                    <select className={fieldClass} value={assignedRoomId} onChange={(event) => { setAssignedRoomId(event.target.value); setFormError('') }} required>
+                      <option value="">Select an available room</option>
+                      {availableRooms.map((availableRoom) => <option key={availableRoom.id} value={availableRoom.id}>{availableRoom.name} · Floor {availableRoom.floor}</option>)}
+                    </select>
+                    <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" />
+                  </span>
+                  <span className="mt-1 block text-[9px] font-normal normal-case tracking-normal text-muted">
+                    {availableRooms.length ? `${availableRooms.length} available for these dates` : 'No rooms available for this type and date range.'}
+                  </span>
+                </label>
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-[10px] font-semibold tracking-wide text-ink">CHECK-IN DATE <span className="text-rose-600">*</span>
-                    <input className={fieldClass} type="date" value={checkIn} min={today.toISOString().slice(0, 10)} onChange={(event) => setCheckIn(event.target.value)} required />
+                    <input className={fieldClass} type="date" value={checkIn} min={today.toISOString().slice(0, 10)} onChange={(event) => { setCheckIn(event.target.value); setFormError('') }} required />
                   </label>
                   <label className="text-[10px] font-semibold tracking-wide text-ink">CHECK-OUT DATE <span className="text-rose-600">*</span>
-                    <input className={fieldClass} type="date" value={checkOut} min={checkIn || today.toISOString().slice(0, 10)} onChange={(event) => setCheckOut(event.target.value)} required />
+                    <input className={fieldClass} type="date" value={checkOut} min={checkIn || today.toISOString().slice(0, 10)} onChange={(event) => { setCheckOut(event.target.value); setFormError('') }} required />
                   </label>
                   <label className="text-[10px] font-semibold tracking-wide text-ink">ADULTS
                     <input className={fieldClass} type="number" min="1" max="10" value={adults} onChange={(event) => setAdults(event.target.value)} required />
@@ -194,14 +262,26 @@ function ReservationDialog({ onClose, onCreate }: {
                 </div>
                 <dl className="divide-y divide-stone-200 rounded-sm border border-stone-200 bg-white px-4">
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Sanctuary</dt><dd className="text-right font-medium text-ink">{room}</dd></div>
+                  <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Assigned room</dt><dd className="text-right font-medium text-ink">{selectedRoom?.name ?? roomDisplayName(assignedRoomId, inventory)}</dd></div>
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Stay dates</dt><dd className="text-right font-medium text-ink">{shortDate(checkIn)} – {shortDate(checkOut)} · {nights} {nights === 1 ? 'night' : 'nights'}</dd></div>
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Party</dt><dd className="text-right font-medium text-ink">{adults} adults, {children} children</dd></div>
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Primary guest</dt><dd className="text-right font-medium text-ink">{guestName}</dd></div>
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Email / telephone</dt><dd className="text-right font-medium text-ink">{email}<br />{phone}</dd></div>
                 </dl>
-                <p className="rounded-sm border border-amber-200 bg-amber-50 p-3 text-[10px] leading-5 text-amber-900">Payment remains pending until it is recorded separately in the reservation folio.</p>
+                <section className="space-y-2 rounded-sm border border-stone-200 bg-white p-3">
+                  <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT RECEIVED</h3>
+                  <label className="block text-[10px] text-muted">
+                    Amount received (₦)
+                    <input className={fieldClass} type="number" min="0" max={totalAmount} step="1" value={amountReceived} aria-invalid={Number(amountReceived) > totalAmount} onChange={(event) => { setAmountReceived(event.target.value); setFormError('') }} />
+                    {Number(amountReceived) > totalAmount && <span className="mt-1 block text-[10px] font-medium text-rose-700">Amount received cannot exceed the reservation total.</span>}
+                  </label>
+                  <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Total amount</span><strong className="text-ink">{reservationCurrency.format(totalAmount)}</strong></div>
+                  <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Balance due</span><strong className={`font-bold ${balanceDue ? 'text-amber-900' : 'text-emerald-800'}`}>{reservationCurrency.format(balanceDue)}</strong></div>
+                  <p className="text-[9px] text-muted">Payment status: <strong className="text-ink">{payment}</strong></p>
+                </section>
               </>
             )}
+            {formError && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-800">{formError}</p>}
           </div>
 
           <footer className="flex items-center justify-between gap-3 border-t border-stone-200 bg-white px-5 py-4">
@@ -218,7 +298,7 @@ function ReservationDialog({ onClose, onCreate }: {
   )
 }
 
-function ReservationDetails({ reservation, onClose }: { reservation: Reservation; onClose: () => void }) {
+function ReservationDetails({ reservation, inventory, onClose }: { reservation: Reservation; inventory: Room[]; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onMouseDown={onClose}>
       <section role="dialog" aria-modal="true" aria-labelledby="reservation-details-title" className="w-full max-w-lg rounded-sm bg-white p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
@@ -233,7 +313,7 @@ function ReservationDetails({ reservation, onClose }: { reservation: Reservation
         <dl className="mt-4 grid grid-cols-1 gap-x-5 divide-y divide-stone-100 border-y border-stone-100 sm:grid-cols-2 sm:divide-y-0">
           <div className="py-3"><dt className="text-[10px] text-muted">Email</dt><dd className="mt-1 break-all text-xs text-ink">{reservation.email}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Telephone</dt><dd className="mt-1 text-xs text-ink">{reservation.phone}</dd></div>
-          <div className="py-3"><dt className="text-[10px] text-muted">Sanctuary</dt><dd className="mt-1 text-xs text-ink">{reservation.room}</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Sanctuary / assigned room</dt><dd className="mt-1 text-xs text-ink">{reservation.room} · {roomDisplayName(reservation.assignedRoomId, inventory)}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Stay dates</dt><dd className="mt-1 text-xs text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Party</dt><dd className="mt-1 text-xs text-ink">{reservation.adults} adults, {reservation.children} children</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Total amount</dt><dd className="mt-1 text-xs text-ink">{reservationCurrency.format(reservation.amount)}</dd></div>
@@ -247,7 +327,7 @@ function ReservationDetails({ reservation, onClose }: { reservation: Reservation
 }
 
 export function AdminReservations() {
-  const { reservations: rows, setReservations } = useAdminReservations()
+  const { reservations: rows, setReservations, rooms } = useAdminReservations()
   const [search, setSearch] = useState('')
   const [folioFilter, setFolioFilter] = useState('All folio statuses')
   const [paymentFilter, setPaymentFilter] = useState('All payment statuses')
@@ -403,7 +483,7 @@ export function AdminReservations() {
                 <tr key={reservation.reference} className="align-top text-muted hover:bg-paper/60">
                   <td className="px-3 py-3"><strong className="block whitespace-nowrap text-[11px] text-ink">{reservation.reference}</strong><small className="mt-1 block text-[10px]">Direct · Web channel</small></td>
                   <td className="px-3 py-3"><strong className="block whitespace-nowrap font-medium text-ink">{reservation.guest}</strong><small className="mt-1 block text-[10px]">{reservation.email}</small>{reservation.tier && <span className="mt-1 inline-block rounded-sm bg-champagne/40 px-1.5 py-0.5 text-[9px] font-semibold text-amber-950">{reservation.tier}</span>}</td>
-                  <td className="px-3 py-3"><span className="block max-w-[145px] text-ink">{reservation.room}</span></td>
+                  <td className="px-3 py-3"><span className="block max-w-[145px] text-ink">{reservation.room}</span><small className="mt-1 block text-[10px]">{roomDisplayName(reservation.assignedRoomId, rooms)}</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</strong><small className="mt-1 block text-[10px]">{nightsBetween(reservation.checkIn, reservation.checkOut)} nights</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="block font-medium text-ink">{reservation.adults} {reservation.adults === 1 ? 'Adult' : 'Adults'}</strong><small className="mt-1 block text-[10px]">{reservation.children} {reservation.children === 1 ? 'Child' : 'Children'}</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{reservationCurrency.format(reservation.amount)}</strong><small className="mt-1 block text-[10px]">{reservation.payment === 'Pending' ? 'Awaiting payment' : reservation.payment === 'Partially Paid' ? `Paid ${reservationCurrency.format(reservationPaidAmount(reservation))} · Due ${reservationCurrency.format(reservationBalanceDue(reservation))}` : 'Settlement recorded'}</small></td>
@@ -434,8 +514,8 @@ export function AdminReservations() {
       </div>
 
       <div className="sr-only" aria-live="polite">Showing {visibleRows.length} reservations</div>
-      {createOpen && <ReservationDialog onClose={() => setCreateOpen(false)} onCreate={createReservation} />}
-      {selectedReservation && <ReservationDetails reservation={selectedReservation} onClose={() => setSelectedReservation(null)} />}
+      {createOpen && <ReservationDialog onClose={() => setCreateOpen(false)} onCreate={createReservation} reservations={rows} inventory={rooms} />}
+      {selectedReservation && <ReservationDetails reservation={selectedReservation} inventory={rooms} onClose={() => setSelectedReservation(null)} />}
     </section>
   )
 }
