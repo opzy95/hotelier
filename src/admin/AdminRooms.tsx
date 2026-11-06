@@ -31,6 +31,7 @@ import {
   reservationPaidAmount,
 } from './adminReservationsData'
 import type { Reservation } from './adminReservationsData'
+import { getOperationalRooms, getRoomReservation, getRoomStatusCounts } from './adminRoomsData'
 import type { Room, RoomStatus } from './adminRoomsData'
 
 const statusDetails: Record<RoomStatus, { color: string; accent: string }> = {
@@ -221,20 +222,6 @@ function RoomEditDialog({ room, onClose, onSave }: {
   )
 }
 
-function roomReservation(roomId: string, reservations: Reservation[]) {
-  const active = reservations.filter((reservation) => (
-    reservation.assignedRoomId === roomId
-    && ['Checked In', 'Confirmed', 'Pending Payment'].includes(reservation.folio)
-  ))
-  const checkedIn = active.find((reservation) => reservation.folio === 'Checked In')
-  if (checkedIn) return checkedIn
-
-  const today = new Date().toISOString().slice(0, 10)
-  return active
-    .filter((reservation) => reservation.checkOut > today)
-    .sort((first, second) => first.checkIn.localeCompare(second.checkIn))[0]
-}
-
 function RoomInspector({ room, reservation, onClose, onStatusChange, onEdit }: {
   room: Room
   reservation?: Reservation
@@ -379,24 +366,11 @@ export function AdminRooms() {
   const [dialog, setDialog] = useState<'room' | 'types' | null>(null)
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null)
 
-  const operationalRooms = useMemo(() => roomData.map((room) => {
-    const reservation = roomReservation(room.id, reservations)
-    if (!reservation) return room
-
-    return {
-      ...room,
-      status: reservation.folio === 'Checked In' ? 'Occupied' as const : 'Reserved' as const,
-      guest: reservation.guest,
-      note: reservation.reference,
-    }
-  }), [reservations, roomData])
+  const operationalRooms = useMemo(() => getOperationalRooms(roomData, reservations), [reservations, roomData])
   const selectedRoom = operationalRooms.find((room) => room.id === selectedId)
-  const selectedReservation = roomReservation(selectedId, reservations)
+  const selectedReservation = getRoomReservation(selectedId, reservations)
   const editingRoom = roomData.find((room) => room.id === editingRoomId)
-  const counts = useMemo(() => operationalRooms.reduce((result, room) => {
-    result[room.status] += 1
-    return result
-  }, { Available: 0, Occupied: 0, Reserved: 0, Cleaning: 0, Maintenance: 0 }), [operationalRooms])
+  const counts = useMemo(() => getRoomStatusCounts(operationalRooms), [operationalRooms])
 
   const filteredRooms = useMemo(() => {
     const query = search.trim().toLowerCase()

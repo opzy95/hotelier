@@ -22,6 +22,8 @@ import { AdminRooms } from '../admin/AdminRooms'
 import { AdminGuests } from '../admin/AdminGuests'
 import { AdminCheckIn } from '../admin/AdminCheckIn'
 import { AdminPayments } from '../admin/AdminPayments'
+import { AdminReports } from '../admin/AdminReports'
+import { AdminStaff } from '../admin/AdminStaff'
 
 function HomePage() {
   return (
@@ -68,6 +70,8 @@ export function AppRoutes() {
         <Route path="guests" element={<AdminGuests />} />
         <Route path="check-in" element={<AdminCheckIn />} />
         <Route path="payments" element={<AdminPayments />} />
+        <Route path="reports" element={<AdminReports />} />
+        <Route path="staff" element={<AdminStaff />} />
         <Route path=":section" element={<AdminSectionPlaceholder />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

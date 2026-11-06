@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation, useParams } from 'react-router-dom'
 import { AdminReservationsProvider } from './AdminReservationsContext'
+import { AdminStaffProvider } from './AdminStaffContext'
 
 const primaryNavigation = [
   { label: 'Overview', path: 'overview', icon: LayoutDashboard },
@@ -108,6 +109,7 @@ export function AdminLayout() {
 
   return (
     <AdminReservationsProvider>
+    <AdminStaffProvider>
     <div className="min-h-screen bg-paper font-body text-ink">
       <aside className={`fixed inset-y-0 left-0 z-50 flex w-[238px] flex-col bg-forest text-white shadow-xl transition-transform duration-200 lg:translate-x-0 ${
         sidebarOpen ? 'translate-x-0' : '-translate-x-full'
@@ -197,6 +199,7 @@ export function AdminLayout() {
         </footer>
       </main>
     </div>
+    </AdminStaffProvider>
     </AdminReservationsProvider>
   )
 }

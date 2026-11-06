@@ -20,6 +20,8 @@ import {
   reservationOutstandingAmount,
   reservationPaidAmount,
 } from './adminReservationsData'
+import { getOperationalRooms, getRoomStatusCounts } from './adminRoomsData'
+import { useAdminStaff } from './AdminStaffContext'
 
 type OperationTab = 'Arrivals' | 'Departures'
 type OperationStatus = 'Check In' | 'Checked In' | 'Pre-Assigned' | 'Check Out' | 'Checked Out'
@@ -32,23 +34,6 @@ type Operation = {
   service: string
   status: OperationStatus
 }
-
-const roomStatuses = [
-  { label: 'Available', count: 12, dot: 'bg-emerald-500', bar: 'bg-emerald-500' },
-  { label: 'Occupied', count: 48, dot: 'bg-amber-800', bar: 'bg-amber-800' },
-  { label: 'Reserved', count: 4, dot: 'bg-sky-500', bar: 'bg-sky-500' },
-  { label: 'Cleaning', count: 6, dot: 'bg-amber-400', bar: 'bg-amber-400' },
-  { label: 'Maintenance / Inspection', count: 2, dot: 'bg-rose-500', bar: 'bg-rose-500' },
-]
-
-const departments = [
-  { name: 'Front Office & Concierge Desk', count: 14, icon: '♧' },
-  { name: 'Housekeeping & Laundry Sanctuary', count: 26, icon: '♙' },
-  { name: 'Food & Beverage / Private Dining', count: 22, icon: '♜' },
-  { name: 'Security & Pier Marine Operations', count: 10, icon: '♢' },
-  { name: 'Maintenance & Marine Engineering', count: 7, icon: '⌘' },
-  { name: 'Executive Administration & Audit', count: 6, icon: '♧' },
-]
 
 const initialOperations: Operation[] = [
   { guest: 'Chief A. Adeleke', room: 'Executive Lagoon Suite · Room 402', tier: 'VIP BUTLER', time: '14:00 WAT', service: 'Lagoon Jetty Shuttle', status: 'Check In' },
@@ -89,7 +74,8 @@ function MetricCard({ label, value, note, icon: Icon, change }: {
 }
 
 export function AdminDashboard() {
-  const { reservations } = useAdminReservations()
+  const { reservations, rooms } = useAdminReservations()
+  const { staff, departments } = useAdminStaff()
   const [operationTab, setOperationTab] = useState<OperationTab>('Arrivals')
   const [operations, setOperations] = useState(initialOperations)
   const [search, setSearch] = useState('')
@@ -114,6 +100,16 @@ export function AdminDashboard() {
       ? operation.status === 'Check In' || operation.status === 'Checked In' || operation.status === 'Pre-Assigned'
       : operation.status === 'Check Out' || operation.status === 'Checked Out'
   ))
+  const operationalRooms = useMemo(() => getOperationalRooms(rooms, reservations), [reservations, rooms])
+  const roomCounts = getRoomStatusCounts(operationalRooms)
+  const onDutyStaff = staff.filter((member) => member.status === 'On Duty').length
+  const roomStatuses = [
+    { label: 'Available', count: roomCounts.Available, dot: 'bg-emerald-500', bar: 'bg-emerald-500' },
+    { label: 'Occupied', count: roomCounts.Occupied, dot: 'bg-amber-800', bar: 'bg-amber-800' },
+    { label: 'Reserved', count: roomCounts.Reserved, dot: 'bg-sky-500', bar: 'bg-sky-500' },
+    { label: 'Cleaning', count: roomCounts.Cleaning, dot: 'bg-amber-400', bar: 'bg-amber-400' },
+    { label: 'Maintenance / Inspection', count: roomCounts.Maintenance, dot: 'bg-rose-500', bar: 'bg-rose-500' },
+  ]
   const collectedAmount = reservationCollectedAmount(reservations)
   const outstandingAmount = reservationOutstandingAmount(reservations)
   const paymentPositionTotal = collectedAmount + outstandingAmount
@@ -155,8 +151,8 @@ export function AdminDashboard() {
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
         <MetricCard label="TOTAL RESERVATIONS" value={String(reservations.length)} note="Reservations currently available" icon={CalendarDays} />
         <MetricCard label="PAYMENTS RECEIVED" value={reservationCurrency.format(collectedAmount)} note="Across all reservation folios" icon={Wallet} />
-        <MetricCard label="OCCUPANCY RATE" value="75%" note="Current room occupancy · 48 / 64 suites" icon={BedDouble} change="+4.0%" />
-        <MetricCard label="TOTAL STAFF" value="85" note="Active hotel employees · 6 departments" icon={UsersRound} change="100% active" />
+        <MetricCard label="OCCUPANCY RATE" value={`${rooms.length ? Math.round((roomCounts.Occupied / rooms.length) * 100) : 0}%`} note={`Current room occupancy · ${roomCounts.Occupied} / ${rooms.length} rooms`} icon={BedDouble} />
+        <MetricCard label="TOTAL STAFF" value={String(staff.length)} note={`${onDutyStaff} on duty · ${departments.length} departments`} icon={UsersRound} />
       </div>
 
       <div className="grid grid-cols-1 items-start gap-4 2xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,0.9fr)]">
@@ -263,10 +259,10 @@ export function AdminDashboard() {
                 <p className="text-[9px] font-semibold tracking-[0.15em] text-amber-800">INVENTORY HEALTH</p>
                 <h2 className="mt-1 font-display text-xl text-ink">Room Status Overview</h2>
               </div>
-              <span className="rounded-sm bg-stone-100 px-2 py-1 text-[9px] font-semibold text-ink">64 TOTAL SUITES</span>
+              <span className="rounded-sm bg-stone-100 px-2 py-1 text-[9px] font-semibold text-ink">{rooms.length} TOTAL ROOMS</span>
             </div>
             <div className="mt-4 flex h-2 overflow-hidden rounded-full bg-stone-100" aria-label="Room status distribution">
-              {roomStatuses.map((status) => <span key={status.label} className={`${status.bar} h-full`} style={{ width: `${(status.count / 72) * 100}%` }} title={`${status.label}: ${status.count}`} />)}
+              {roomStatuses.map((status) => <span key={status.label} className={`${status.bar} h-full`} style={{ width: `${rooms.length ? (status.count / rooms.length) * 100 : 0}%` }} title={`${status.label}: ${status.count}`} />)}
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               {roomStatuses.map((status) => (
@@ -351,16 +347,20 @@ export function AdminDashboard() {
                 <p className="text-[9px] font-semibold tracking-[0.15em] text-amber-800">STAFFING HIERARCHY</p>
                 <h2 className="mt-1 font-display text-xl text-ink">Department Overview</h2>
               </div>
-              <span className="text-[9px] font-semibold text-emerald-800">85 PERSONNEL</span>
+                <span className="text-[9px] font-semibold text-emerald-800">{staff.length} PERSONNEL</span>
             </div>
-            <p className="mt-2 text-[10px] leading-4 text-muted">6 operational divisions stationed across mainland &amp; waterfront wings:</p>
+            <p className="mt-2 text-[10px] leading-4 text-muted">{departments.length} operational divisions across the property:</p>
             <ul className="mt-3 grid gap-2">
-              {departments.map((department) => (
-                <li key={department.name} className="flex items-center justify-between gap-2 text-[10px]">
-                  <span className="flex min-w-0 items-center gap-2 text-muted"><span className="w-4 shrink-0 text-center text-amber-900">{department.icon}</span><span>{department.name}</span></span>
-                  <strong className="shrink-0 rounded-sm bg-stone-100 px-2 py-1 text-[9px] text-ink">{department.count} on duty</strong>
+              {departments.map((department) => {
+                const departmentStaff = staff.filter((member) => member.departmentId === department.id)
+                const onDuty = departmentStaff.filter((member) => member.status === 'On Duty').length
+                return (
+                <li key={department.id} className="flex items-center justify-between gap-2 text-[10px]">
+                  <span className="flex min-w-0 items-center gap-2 text-muted"><span className="grid size-5 shrink-0 place-items-center bg-paper text-[8px] font-bold text-amber-900">{department.shortName}</span><span>{department.name}</span></span>
+                  <strong className="shrink-0 rounded-sm bg-stone-100 px-2 py-1 text-[9px] text-ink">{onDuty} on duty</strong>
                 </li>
-              ))}
+                )
+              })}
             </ul>
             <p className="mt-3 border-t border-stone-100 pt-3 text-right">
               <Link to="/dashboard/staff" className="text-[10px] font-medium text-amber-900 hover:underline">Manage Staff &amp; Roster →</Link>
