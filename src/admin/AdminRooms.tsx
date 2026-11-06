@@ -221,6 +221,20 @@ function RoomEditDialog({ room, onClose, onSave }: {
   )
 }
 
+function roomReservation(roomId: string, reservations: Reservation[]) {
+  const active = reservations.filter((reservation) => (
+    reservation.assignedRoomId === roomId
+    && ['Checked In', 'Confirmed', 'Pending Payment'].includes(reservation.folio)
+  ))
+  const checkedIn = active.find((reservation) => reservation.folio === 'Checked In')
+  if (checkedIn) return checkedIn
+
+  const today = new Date().toISOString().slice(0, 10)
+  return active
+    .filter((reservation) => reservation.checkOut > today)
+    .sort((first, second) => first.checkIn.localeCompare(second.checkIn))[0]
+}
+
 function RoomInspector({ room, reservation, onClose, onStatusChange, onEdit }: {
   room: Room
   reservation?: Reservation
@@ -247,21 +261,27 @@ function RoomInspector({ room, reservation, onClose, onStatusChange, onEdit }: {
             <h3 className="text-[10px] font-semibold tracking-wide text-ink">LIVE STATUS SWITCHER</h3>
             <span className="text-[9px] text-amber-800">{room.status === 'Occupied' ? 'Active in-house' : 'Update room status'}</span>
           </div>
-          <div className="grid grid-cols-3 gap-1 rounded-sm border border-stone-200 bg-stone-50 p-1">
-            {(['Available', 'Occupied', 'Reserved', 'Cleaning', 'Maintenance'] as RoomStatus[]).map((status) => (
-              <button
-                type="button"
-                key={status}
-                aria-pressed={room.status === status}
-                onClick={() => onStatusChange(status)}
-                className={`px-1 py-2 text-[9px] transition-colors ${room.status === status ? 'bg-forest text-white' : 'text-muted hover:bg-white hover:text-ink'}`}
-              >
-                {status}
-              </button>
-            ))}
-          </div>
+          {reservation ? (
+            <p className="border border-stone-200 bg-stone-50 px-3 py-2.5 text-[9px] leading-4 text-muted">
+              Status follows folio {reservation.reference}. Use the front desk check-in or check-out action to update this room.
+            </p>
+          ) : (
+            <div className="grid grid-cols-3 gap-1 rounded-sm border border-stone-200 bg-stone-50 p-1">
+              {(['Available', 'Cleaning', 'Maintenance'] as RoomStatus[]).map((status) => (
+                <button
+                  type="button"
+                  key={status}
+                  aria-pressed={room.status === status}
+                  onClick={() => onStatusChange(status)}
+                  className={`px-1 py-2 text-[9px] transition-colors ${room.status === status ? 'bg-forest text-white' : 'text-muted hover:bg-white hover:text-ink'}`}
+                >
+                  {status}
+                </button>
+              ))}
+            </div>
+          )}
         </section>
-        {room.status === 'Occupied' && (
+        {room.status === 'Occupied' && reservation?.folio === 'Checked In' && (
           <section className="border border-amber-200 bg-amber-50/70 p-3">
             <h3 className="flex items-center gap-1.5 text-[10px] font-semibold text-amber-950"><ShieldCheck aria-hidden="true" className="size-3.5" /> PMS Security Lockout Active</h3>
             <p className="mt-1.5 text-[9px] leading-4 text-amber-950/75">Active guest reservation in-house. Room cannot be manually marked Available without a formal checkout.</p>
@@ -360,10 +380,7 @@ export function AdminRooms() {
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null)
 
   const operationalRooms = useMemo(() => roomData.map((room) => {
-    const reservation = reservations.find((item) => (
-      item.assignedRoomId === room.id
-      && ['Checked In', 'Confirmed', 'Pending Payment'].includes(item.folio)
-    ))
+    const reservation = roomReservation(room.id, reservations)
     if (!reservation) return room
 
     return {
@@ -374,10 +391,7 @@ export function AdminRooms() {
     }
   }), [reservations, roomData])
   const selectedRoom = operationalRooms.find((room) => room.id === selectedId)
-  const selectedReservation = reservations.find((reservation) => (
-    reservation.assignedRoomId === selectedId
-    && ['Checked In', 'Confirmed', 'Pending Payment'].includes(reservation.folio)
-  ))
+  const selectedReservation = roomReservation(selectedId, reservations)
   const editingRoom = roomData.find((room) => room.id === editingRoomId)
   const counts = useMemo(() => operationalRooms.reduce((result, room) => {
     result[room.status] += 1
@@ -405,7 +419,7 @@ export function AdminRooms() {
   }
 
   function updateSelectedStatus(status: RoomStatus) {
-    if (!selectedRoom) return
+    if (!selectedRoom || selectedReservation) return
     setRoomData((current) => current.map((room) => room.id === selectedRoom.id ? { ...room, status } : room))
   }
 

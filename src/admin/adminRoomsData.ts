@@ -1,4 +1,5 @@
 import { roomSuites } from '../data/roomSuites'
+import type { Reservation } from './adminReservationsData'
 
 export type RoomStatus = 'Available' | 'Occupied' | 'Reserved' | 'Cleaning' | 'Maintenance'
 
@@ -15,6 +16,33 @@ export type Room = {
   amenities: string[]
   guest?: string
   note?: string
+}
+
+export function getAvailableRoomsForStay(
+  rooms: Room[],
+  reservations: Reservation[],
+  checkIn: string,
+  checkOut: string,
+  guestCount: number,
+  matches: (room: Room) => boolean = () => true,
+) {
+  if (!checkIn || !checkOut || checkOut <= checkIn || guestCount < 1) return []
+
+  return rooms.filter((room) => {
+    if (room.guests < guestCount || ['Cleaning', 'Maintenance'].includes(room.status) || !matches(room)) return false
+
+    const activeReservations = reservations.filter((reservation) => (
+      reservation.assignedRoomId === room.id
+      && !['Cancelled', 'Checked Out'].includes(reservation.folio)
+    ))
+    const hasDateConflict = activeReservations.some((reservation) => (
+      checkIn < reservation.checkOut && reservation.checkIn < checkOut
+    ))
+    const statusAllowsAssignment = room.status === 'Available'
+      || (activeReservations.length > 0 && !activeReservations.some((reservation) => reservation.folio === 'Checked In'))
+
+    return statusAllowsAssignment && !hasDateConflict
+  })
 }
 
 const initialRooms: Room[] = [

@@ -7,25 +7,20 @@ import {
   ChevronRight,
   Clock3,
   Search,
-  Sparkles,
-  TrendingUp,
   UsersRound,
   Wallet,
 } from 'lucide-react'
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 import { Link } from 'react-router-dom'
 import { useAdminReservations } from './AdminReservationsContext'
-import { formatReservationDate, reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
+import {
+  formatReservationDate,
+  reservationBalanceDue,
+  reservationCollectedAmount,
+  reservationCurrency,
+  reservationOutstandingAmount,
+  reservationPaidAmount,
+} from './adminReservationsData'
 
-type RevenuePeriod = 'This Week' | 'This Month' | 'This Year'
 type OperationTab = 'Arrivals' | 'Departures'
 type OperationStatus = 'Check In' | 'Checked In' | 'Pre-Assigned' | 'Check Out' | 'Checked Out'
 
@@ -36,33 +31,6 @@ type Operation = {
   time: string
   service: string
   status: OperationStatus
-}
-
-const revenueData: Record<RevenuePeriod, { label: string; revenue: number; prior: number }[]> = {
-  'This Week': [
-    { label: 'Mon', revenue: 4.2, prior: 3.8 },
-    { label: 'Tue', revenue: 5.1, prior: 4.1 },
-    { label: 'Wed', revenue: 7.8, prior: 5.2 },
-    { label: 'Thu', revenue: 9.1, prior: 6.1 },
-    { label: 'Fri', revenue: 8.8, prior: 7.3 },
-    { label: 'Sat', revenue: 11.4, prior: 8.1 },
-    { label: 'Sun', revenue: 12.2, prior: 9.2 },
-  ],
-  'This Month': [
-    { label: 'Week 1', revenue: 5.2, prior: 4.1 },
-    { label: 'Week 2', revenue: 10.1, prior: 5.4 },
-    { label: 'Week 3', revenue: 13.2, prior: 7.1 },
-    { label: 'Week 4', revenue: 13, prior: 9 },
-    { label: 'Week 5', revenue: 18.5, prior: 11.8 },
-  ],
-  'This Year': [
-    { label: 'Jan', revenue: 8.2, prior: 6.2 },
-    { label: 'Mar', revenue: 9.3, prior: 7 },
-    { label: 'May', revenue: 11.5, prior: 8.2 },
-    { label: 'Jul', revenue: 14, prior: 9.4 },
-    { label: 'Sep', revenue: 16.3, prior: 11.1 },
-    { label: 'Oct', revenue: 18.5, prior: 12.6 },
-  ],
 }
 
 const roomStatuses = [
@@ -89,26 +57,6 @@ const initialOperations: Operation[] = [
   { guest: 'Dr. Obinna Okonkwo', room: 'Deluxe Lagoon Room · Room 216', tier: 'CORPORATE', time: '11:00 WAT', service: 'Airport Transfer', status: 'Check Out' },
   { guest: 'Ambassador G. Moreau', room: 'Executive Lagoon Suite · Room 518', tier: 'DIPLOMATIC', time: '12:00 WAT', service: 'Private Sedan Escort', status: 'Check Out' },
 ]
-
-function RevenueTooltip({ active, payload, label }: {
-  active?: boolean
-  payload?: { name: string; value: number; color: string }[]
-  label?: string
-}) {
-  if (!active || !payload?.length) return null
-
-  return (
-    <div className="rounded-md border border-stone-200 bg-white p-3 text-xs shadow-lg">
-      <strong className="text-ink">{label}</strong>
-      {payload.map((item) => (
-        <p key={item.name} className="mt-1 flex justify-between gap-5" style={{ color: item.color }}>
-          <span>{item.name}</span>
-          <b>₦{item.value.toFixed(1)}M</b>
-        </p>
-      ))}
-    </div>
-  )
-}
 
 function reservationStatusClass(status: string) {
   if (status === 'Confirmed') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -142,7 +90,6 @@ function MetricCard({ label, value, note, icon: Icon, change }: {
 
 export function AdminDashboard() {
   const { reservations } = useAdminReservations()
-  const [period, setPeriod] = useState<RevenuePeriod>('This Month')
   const [operationTab, setOperationTab] = useState<OperationTab>('Arrivals')
   const [operations, setOperations] = useState(initialOperations)
   const [search, setSearch] = useState('')
@@ -167,6 +114,10 @@ export function AdminDashboard() {
       ? operation.status === 'Check In' || operation.status === 'Checked In' || operation.status === 'Pre-Assigned'
       : operation.status === 'Check Out' || operation.status === 'Checked Out'
   ))
+  const collectedAmount = reservationCollectedAmount(reservations)
+  const outstandingAmount = reservationOutstandingAmount(reservations)
+  const paymentPositionTotal = collectedAmount + outstandingAmount
+  const collectedShare = paymentPositionTotal ? (collectedAmount / paymentPositionTotal) * 100 : 0
 
   function updateOperationStatus(operation: Operation) {
     setOperations((current) => current.map((item) => (
@@ -203,7 +154,7 @@ export function AdminDashboard() {
 
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
         <MetricCard label="TOTAL RESERVATIONS" value={String(reservations.length)} note="Reservations currently available" icon={CalendarDays} />
-        <MetricCard label="TOTAL REVENUE" value="₦18,500,000" note="Revenue this month · Above target" icon={Wallet} />
+        <MetricCard label="PAYMENTS RECEIVED" value={reservationCurrency.format(collectedAmount)} note="Across all reservation folios" icon={Wallet} />
         <MetricCard label="OCCUPANCY RATE" value="75%" note="Current room occupancy · 48 / 64 suites" icon={BedDouble} change="+4.0%" />
         <MetricCard label="TOTAL STAFF" value="85" note="Active hotel employees · 6 departments" icon={UsersRound} change="100% active" />
       </div>
@@ -213,55 +164,31 @@ export function AdminDashboard() {
           <article className="overflow-hidden rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm sm:p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <p className="text-[9px] font-semibold tracking-[0.15em] text-amber-800">FINANCIAL PERFORMANCE</p>
-                <h2 className="mt-1 font-display text-xl text-ink">Revenue Analytics</h2>
+                <p className="text-[9px] font-semibold tracking-[0.15em] text-amber-800">LIVE FOLIO SETTLEMENTS</p>
+                <h2 className="mt-1 font-display text-xl text-ink">Payment Position</h2>
               </div>
-              <div className="flex rounded-sm bg-stone-100 p-1" role="group" aria-label="Revenue chart period">
-                {(['This Week', 'This Month', 'This Year'] as const).map((option) => (
-                  <button
-                    type="button"
-                    key={option}
-                    aria-pressed={period === option}
-                    onClick={() => setPeriod(option)}
-                    className={`rounded-sm px-2 py-1.5 text-[10px] transition-colors ${
-                      period === option ? 'bg-forest text-white shadow-sm' : 'text-muted hover:text-ink'
-                    }`}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
+              <Link to="/dashboard/payments" className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-900 hover:underline">Open Payments <ArrowRight aria-hidden="true" className="size-3" /></Link>
             </div>
-            <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
+            <div className="mt-6 grid gap-5 sm:grid-cols-2">
               <div>
-                <strong className="font-display text-2xl text-ink">₦18.5M <small className="font-body text-xs text-muted">NGN</small></strong>
-                <p className="mt-1 text-[10px] text-muted">Gross collections recorded through Lagoon Folio &amp; Suites</p>
+                <p className="text-[9px] font-semibold tracking-[0.12em] text-muted">PAYMENTS RECEIVED</p>
+                <strong className="mt-1 block font-display text-2xl text-ink">{reservationCurrency.format(collectedAmount)}</strong>
+                <p className="mt-1 text-[10px] text-muted">Across all reservation folios</p>
               </div>
-              <span className="inline-flex items-center gap-1 rounded-sm bg-emerald-50 px-2 py-1.5 text-[10px] text-emerald-800">
-                <TrendingUp aria-hidden="true" className="size-3" /> +14.6% vs previous cycle
-              </span>
+              <div>
+                <p className="text-[9px] font-semibold tracking-[0.12em] text-muted">OUTSTANDING BALANCE</p>
+                <strong className="mt-1 block font-display text-2xl text-amber-900">{reservationCurrency.format(outstandingAmount)}</strong>
+                <p className="mt-1 text-[10px] text-muted">Still due on active folios</p>
+              </div>
             </div>
-            <div className="mt-4 h-[230px] min-w-0 sm:h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={revenueData[period]} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="adminRevenueFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#9b7a3d" stopOpacity={0.22} />
-                      <stop offset="100%" stopColor="#9b7a3d" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid vertical={false} stroke="#efeee9" strokeDasharray="2 4" />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: '#8a8e87', fontSize: 10 }} />
-                  <YAxis tickLine={false} axisLine={false} width={42} tick={{ fill: '#8a8e87', fontSize: 10 }} tickFormatter={(value: number) => `₦${value}M`} domain={[0, 20]} />
-                  <Tooltip content={<RevenueTooltip />} />
-                  <Area type="monotone" dataKey="prior" name="Previous cycle" stroke="#c6b184" strokeDasharray="4 4" strokeWidth={1.5} fill="transparent" />
-                  <Area type="monotone" dataKey="revenue" name="Revenue" stroke="#80622e" strokeWidth={2} fill="url(#adminRevenueFill)" activeDot={{ r: 4, fill: '#80622e', stroke: '#fff', strokeWidth: 2 }} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="mt-3 flex flex-col gap-2 border-t border-stone-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
-              <span className="flex items-center gap-2 text-[10px] text-muted"><Sparkles aria-hidden="true" className="size-3.5 text-amber-800" />Peak revenue: <strong className="font-medium text-ink">Presidential Waterfront Villas &amp; Private Lagoon Charters</strong></span>
-              <b className="text-[9px] tracking-wide text-amber-800">68% OF REVENUE</b>
+            <div className="mt-5">
+              <div className="h-2 overflow-hidden bg-amber-100" role="img" aria-label={`${collectedShare.toFixed(0)} percent of recorded active folio value collected`}>
+                <div className="h-full bg-forest transition-[width]" style={{ width: `${collectedShare}%` }} />
+              </div>
+              <div className="mt-2 flex flex-wrap justify-between gap-2 text-[9px] text-muted">
+                <span>Collected · {collectedShare.toFixed(0)}%</span>
+                <span>Outstanding · {(100 - collectedShare).toFixed(0)}%</span>
+              </div>
             </div>
           </article>
 

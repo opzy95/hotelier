@@ -10,7 +10,6 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
-  MoreVertical,
   Plus,
   Search,
   SlidersHorizontal,
@@ -19,31 +18,23 @@ import {
 import { useAdminReservations } from './AdminReservationsContext'
 import { reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
 import type { FolioStatus, PaymentStatus, Reservation } from './adminReservationsData'
+import { getAvailableRoomsForStay } from './adminRoomsData'
 import type { Room } from './adminRoomsData'
 
 const folioOptions: FolioStatus[] = ['Confirmed', 'Checked In', 'Pending Payment', 'Cancelled', 'Checked Out']
 const paymentOptions: PaymentStatus[] = ['Paid', 'Partially Paid', 'Pending', 'Refunded']
 const defaultRoomOptions = ['Executive Lagoon Suite', 'Presidential Sanctuary Penthouse', 'Deluxe Lagoon Room', 'Waterfront Villa']
 const today = new Date()
+const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+
+function isUpcomingReservation(reservation: Reservation) {
+  return reservation.checkIn > todayKey && ['Confirmed', 'Pending Payment'].includes(reservation.folio)
+}
 
 function inventoryTypeMatches(room: Room, roomType: string) {
   if (roomType === 'Presidential Sanctuary Penthouse') return room.type.toLowerCase().includes('presidential')
   if (roomType === 'Waterfront Villa') return room.type.toLowerCase().includes('villa')
   return room.type === roomType
-}
-
-function getAvailableRooms(roomType: string, checkIn: string, checkOut: string, reservations: Reservation[], inventory: Room[]) {
-  return inventory.filter((room) => (
-    room.status === 'Available'
-    && inventoryTypeMatches(room, roomType)
-    && !reservations.some((reservation) => (
-      reservation.assignedRoomId === room.id
-      && reservation.folio !== 'Cancelled'
-      && reservation.folio !== 'Checked Out'
-      && checkIn < reservation.checkOut
-      && reservation.checkIn < checkOut
-    ))
-  ))
 }
 
 function roomDisplayName(roomId: string | undefined, inventory: Room[]) {
@@ -110,7 +101,14 @@ function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const nights = nightsBetween(checkIn, checkOut)
-  const availableRooms = getAvailableRooms(room, checkIn, checkOut, reservations, inventory)
+  const availableRooms = getAvailableRoomsForStay(
+    inventory,
+    reservations,
+    checkIn,
+    checkOut,
+    Number(adults) + Number(children),
+    (roomItem) => inventoryTypeMatches(roomItem, room),
+  )
   const selectedRoom = availableRooms.find((availableRoom) => availableRoom.id === assignedRoomId)
   const nightlyRate = selectedRoom?.rate ?? inventory.find((availableRoom) => inventoryTypeMatches(availableRoom, room))?.rate ?? 0
   const totalAmount = nightlyRate * nights
@@ -219,6 +217,19 @@ function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
                     {availableRooms.length ? `${availableRooms.length} available for these dates` : 'No rooms available for this type and date range.'}
                   </span>
                 </label>
+                {selectedRoom && checkIn && checkOut > checkIn && (
+                  <section className="space-y-2 border border-stone-200 bg-white p-3">
+                    <h3 className="text-[10px] font-semibold tracking-wide text-ink">ROOM PRICE</h3>
+                    <div className="flex justify-between gap-3 text-[11px]">
+                      <span className="text-muted">Nightly rate</span>
+                      <strong className="text-ink">{reservationCurrency.format(selectedRoom.rate)} / night</strong>
+                    </div>
+                    <div className="flex justify-between gap-3 border-t border-stone-100 pt-2 text-[11px]">
+                      <span className="text-muted">Total stay · {nights} {nights === 1 ? 'night' : 'nights'}</span>
+                      <strong className="text-ink">{reservationCurrency.format(selectedRoom.rate * nights)}</strong>
+                    </div>
+                  </section>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <label className="text-[10px] font-semibold tracking-wide text-ink">CHECK-IN DATE <span className="text-rose-600">*</span>
                     <input className={fieldClass} type="date" value={checkIn} min={today.toISOString().slice(0, 10)} onChange={(event) => { setCheckIn(event.target.value); setFormError('') }} required />
@@ -316,7 +327,8 @@ function ReservationDetails({ reservation, inventory, onClose }: { reservation: 
           <div className="py-3"><dt className="text-[10px] text-muted">Sanctuary / assigned room</dt><dd className="mt-1 text-xs text-ink">{reservation.room} · {roomDisplayName(reservation.assignedRoomId, inventory)}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Stay dates</dt><dd className="mt-1 text-xs text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Party</dt><dd className="mt-1 text-xs text-ink">{reservation.adults} adults, {reservation.children} children</dd></div>
-          <div className="py-3"><dt className="text-[10px] text-muted">Total amount</dt><dd className="mt-1 text-xs text-ink">{reservationCurrency.format(reservation.amount)}</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Room rate per night</dt><dd className="mt-1 text-xs text-ink">{reservationCurrency.format(reservation.nightlyRate ?? Math.round(reservation.amount / nightsBetween(reservation.checkIn, reservation.checkOut)))} / night</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Total stay · {nightsBetween(reservation.checkIn, reservation.checkOut)} {nightsBetween(reservation.checkIn, reservation.checkOut) === 1 ? 'night' : 'nights'}</dt><dd className="mt-1 text-xs font-semibold text-ink">{reservationCurrency.format(reservation.amount)}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Amount paid</dt><dd className="mt-1 text-xs text-emerald-800">{reservationCurrency.format(reservationPaidAmount(reservation))}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Remaining balance</dt><dd className={`mt-1 text-xs font-bold ${reservationBalanceDue(reservation) ? 'text-amber-900' : 'text-ink'}`}>{reservationCurrency.format(reservationBalanceDue(reservation))}</dd></div>
           <div className="py-3 sm:col-span-2"><dt className="text-[10px] text-muted">Payment / folio</dt><dd className="mt-1 text-xs text-ink">{reservation.payment} / {reservation.folio}</dd></div>
@@ -326,8 +338,28 @@ function ReservationDetails({ reservation, inventory, onClose }: { reservation: 
   )
 }
 
+function CancelReservationDialog({ reservation, onClose, onConfirm }: {
+  reservation: Reservation
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" onMouseDown={onClose}>
+      <section role="dialog" aria-modal="true" aria-labelledby="cancel-reservation-title" className="w-full max-w-sm border border-stone-200 bg-white p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <CircleAlert aria-hidden="true" className="size-6 text-amber-800" />
+        <h2 id="cancel-reservation-title" className="mt-3 font-display text-xl text-ink">Cancel reservation?</h2>
+        <p className="mt-2 text-xs leading-5 text-muted">Cancel {reservation.guest}&apos;s reservation for {shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}. The room will be released if no other active folio uses it. Any refund should be recorded separately.</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="border border-stone-300 px-3 py-2 text-[10px] font-semibold text-ink hover:bg-stone-50">Keep Reservation</button>
+          <button type="button" onClick={onConfirm} className="bg-rose-700 px-3 py-2 text-[10px] font-semibold text-white hover:bg-rose-800">Cancel Reservation</button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 export function AdminReservations() {
-  const { reservations: rows, setReservations, rooms } = useAdminReservations()
+  const { reservations: rows, setReservations, rooms, setRooms } = useAdminReservations()
   const [search, setSearch] = useState('')
   const [folioFilter, setFolioFilter] = useState('All folio statuses')
   const [paymentFilter, setPaymentFilter] = useState('All payment statuses')
@@ -335,6 +367,7 @@ export function AdminReservations() {
   const [page, setPage] = useState(1)
   const [createOpen, setCreateOpen] = useState(false)
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null)
+  const [reservationToCancel, setReservationToCancel] = useState<Reservation | null>(null)
   const rowsPerPage = 5
 
   const filteredRows = useMemo(() => {
@@ -342,7 +375,8 @@ export function AdminReservations() {
     return rows.filter((reservation) => {
       const matchesQuery = !query || [reservation.reference, reservation.guest, reservation.email, reservation.room]
         .some((value) => value.toLowerCase().includes(query))
-      const matchesFolio = folioFilter === 'All folio statuses' || reservation.folio === folioFilter
+      const matchesFolio = folioFilter === 'All folio statuses'
+        || (folioFilter === 'Upcoming' ? isUpcomingReservation(reservation) : reservation.folio === folioFilter)
       const matchesPayment = paymentFilter === 'All payment statuses' || reservation.payment === paymentFilter
       const date = new Date(`${reservation.checkIn}T12:00:00`)
       const matchesDate = dateFilter === 'Any check-in date'
@@ -355,12 +389,11 @@ export function AdminReservations() {
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / rowsPerPage))
   const currentPage = Math.min(page, totalPages)
   const visibleRows = filteredRows.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
-  const confirmedCount = rows.filter((row) => row.folio === 'Confirmed').length
+  const upcomingCount = rows.filter(isUpcomingReservation).length
   const pendingReservations = rows.filter((row) => row.payment === 'Pending' || row.payment === 'Partially Paid')
   const cancelledCount = rows.filter((row) => row.folio === 'Cancelled').length
   const checkedInCount = rows.filter((row) => row.folio === 'Checked In').length
   const pendingAmount = pendingReservations.reduce((total, row) => total + reservationBalanceDue(row), 0)
-  const confirmedPercentage = rows.length ? ((confirmedCount / rows.length) * 100).toFixed(1) : '0.0'
   const cancelledPercentage = rows.length ? ((cancelledCount / rows.length) * 100).toFixed(1) : '0.0'
   function clearFilters() {
     setSearch('')
@@ -375,6 +408,33 @@ export function AdminReservations() {
     setPage(1)
     setSearch('')
     setCreateOpen(false)
+  }
+
+  function cancelReservation() {
+    if (!reservationToCancel) return
+    const cancelled = reservationToCancel
+    const remainingRoomReservations = rows.filter((reservation) => (
+      reservation.reference !== cancelled.reference
+      && reservation.assignedRoomId === cancelled.assignedRoomId
+      && !['Cancelled', 'Checked Out'].includes(reservation.folio)
+    ))
+    const linkedReservation = remainingRoomReservations.find((reservation) => reservation.folio === 'Checked In')
+      ?? remainingRoomReservations[0]
+
+    setReservations((current) => current.map((reservation) => reservation.reference === cancelled.reference
+      ? { ...reservation, folio: 'Cancelled' }
+      : reservation))
+    if (cancelled.assignedRoomId) {
+      setRooms((current) => current.map((room) => {
+        if (room.id !== cancelled.assignedRoomId) return room
+        const status = linkedReservation
+          ? linkedReservation.folio === 'Checked In' ? 'Occupied' : 'Reserved'
+          : ['Cleaning', 'Maintenance'].includes(room.status) ? room.status : 'Available'
+        return { ...room, status, guest: linkedReservation?.guest, note: linkedReservation?.reference }
+      }))
+    }
+    setSelectedReservation(null)
+    setReservationToCancel(null)
   }
 
   const selectClass = 'w-full appearance-none rounded-sm border border-stone-200 bg-white py-2.5 pl-3 pr-8 text-[10px] text-ink outline-none focus:border-amber-800'
@@ -411,8 +471,8 @@ export function AdminReservations() {
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
           <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">CONFIRMED</span>
           <CircleCheck aria-hidden="true" className="absolute right-4 top-4 size-8 rounded-sm bg-emerald-50 p-2 text-emerald-700" />
-          <strong className="mt-2 block font-display text-2xl text-ink">{confirmedCount} <small className="font-body text-xs text-emerald-700">{confirmedPercentage}%</small></strong>
-          <p className="mt-1 text-[10px] text-muted">Guaranteed deposits and direct allocations</p>
+          <strong className="mt-2 block font-display text-2xl text-ink">{upcomingCount}</strong>
+          <p className="mt-1 text-[10px] text-muted">Confirmed stays with future check-in dates</p>
         </article>
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
           <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">PENDING PAYMENT</span>
@@ -438,7 +498,7 @@ export function AdminReservations() {
           <label className="relative">
             <span className="sr-only">Filter by folio status</span>
             <select className={selectClass} value={folioFilter} onChange={(event) => { setFolioFilter(event.target.value); setPage(1) }}>
-              <option>All folio statuses</option>{folioOptions.map((status) => <option key={status}>{status}</option>)}
+              <option>All folio statuses</option><option>Upcoming</option>{folioOptions.map((status) => <option key={status}>{status}</option>)}
             </select>
             <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 size-3 -translate-y-1/2 text-muted" />
           </label>
@@ -484,7 +544,7 @@ export function AdminReservations() {
                   <td className="px-3 py-3"><strong className="block whitespace-nowrap text-[11px] text-ink">{reservation.reference}</strong><small className="mt-1 block text-[10px]">Direct · Web channel</small></td>
                   <td className="px-3 py-3"><strong className="block whitespace-nowrap font-medium text-ink">{reservation.guest}</strong><small className="mt-1 block text-[10px]">{reservation.email}</small>{reservation.tier && <span className="mt-1 inline-block rounded-sm bg-champagne/40 px-1.5 py-0.5 text-[9px] font-semibold text-amber-950">{reservation.tier}</span>}</td>
                   <td className="px-3 py-3"><span className="block max-w-[145px] text-ink">{reservation.room}</span><small className="mt-1 block text-[10px]">{roomDisplayName(reservation.assignedRoomId, rooms)}</small></td>
-                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</strong><small className="mt-1 block text-[10px]">{nightsBetween(reservation.checkIn, reservation.checkOut)} nights</small></td>
+                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</strong>{isUpcomingReservation(reservation) && <span className="mt-1 block w-fit border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold text-sky-800">Upcoming</span>}<small className="mt-1 block text-[10px]">{nightsBetween(reservation.checkIn, reservation.checkOut)} nights</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="block font-medium text-ink">{reservation.adults} {reservation.adults === 1 ? 'Adult' : 'Adults'}</strong><small className="mt-1 block text-[10px]">{reservation.children} {reservation.children === 1 ? 'Child' : 'Children'}</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{reservationCurrency.format(reservation.amount)}</strong><small className="mt-1 block text-[10px]">{reservation.payment === 'Pending' ? 'Awaiting payment' : reservation.payment === 'Partially Paid' ? `Paid ${reservationCurrency.format(reservationPaidAmount(reservation))} · Due ${reservationCurrency.format(reservationBalanceDue(reservation))}` : 'Settlement recorded'}</small></td>
                   <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-medium ${statusStyle(reservation.payment)}`}>{reservation.payment}</span></td>
@@ -492,7 +552,7 @@ export function AdminReservations() {
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-1">
                       <button type="button" onClick={() => setSelectedReservation(reservation)} className="rounded-sm border border-stone-200 px-2 py-1 text-[10px] font-medium text-ink hover:border-forest hover:text-forest">View</button>
-                      <button type="button" onClick={() => setSelectedReservation(reservation)} aria-label={`More details for ${reservation.reference}`} className="grid size-7 place-items-center rounded-sm text-muted hover:bg-stone-100"><MoreVertical aria-hidden="true" className="size-3.5" /></button>
+                      {['Confirmed', 'Pending Payment'].includes(reservation.folio) && <button type="button" onClick={() => setReservationToCancel(reservation)} className="rounded-sm border border-rose-200 px-2 py-1 text-[10px] font-medium text-rose-700 hover:bg-rose-50">Cancel</button>}
                     </div>
                   </td>
                 </tr>
@@ -516,6 +576,7 @@ export function AdminReservations() {
       <div className="sr-only" aria-live="polite">Showing {visibleRows.length} reservations</div>
       {createOpen && <ReservationDialog onClose={() => setCreateOpen(false)} onCreate={createReservation} reservations={rows} inventory={rooms} />}
       {selectedReservation && <ReservationDetails reservation={selectedReservation} inventory={rooms} onClose={() => setSelectedReservation(null)} />}
+      {reservationToCancel && <CancelReservationDialog reservation={reservationToCancel} onClose={() => setReservationToCancel(null)} onConfirm={cancelReservation} />}
     </section>
   )
 }

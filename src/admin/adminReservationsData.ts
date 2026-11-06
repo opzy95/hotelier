@@ -46,6 +46,20 @@ export function reservationBalanceDue(reservation: Reservation) {
   return Math.max(0, reservation.amount - reservationPaidAmount(reservation))
 }
 
+export function reservationCollectedAmount(reservations: Reservation[]) {
+  return reservations.reduce((total, reservation) => (
+    reservation.payment === 'Refunded' ? total : total + reservationPaidAmount(reservation)
+  ), 0)
+}
+
+export function reservationOutstandingAmount(reservations: Reservation[]) {
+  return reservations.reduce((total, reservation) => (
+    reservation.folio === 'Cancelled' || reservation.payment === 'Refunded'
+      ? total
+      : total + reservationBalanceDue(reservation)
+  ), 0)
+}
+
 export function formatReservationDate(value: string) {
   return new Date(`${value}T12:00:00`).toLocaleDateString('en-GB', {
     day: '2-digit',

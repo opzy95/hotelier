@@ -20,6 +20,8 @@ import { AdminDashboard } from '../admin/AdminDashboard'
 import { AdminReservations } from '../admin/AdminReservations'
 import { AdminRooms } from '../admin/AdminRooms'
 import { AdminGuests } from '../admin/AdminGuests'
+import { AdminCheckIn } from '../admin/AdminCheckIn'
+import { AdminPayments } from '../admin/AdminPayments'
 
 function HomePage() {
   return (
@@ -64,6 +66,8 @@ export function AppRoutes() {
         <Route path="reservations" element={<AdminReservations />} />
         <Route path="rooms" element={<AdminRooms />} />
         <Route path="guests" element={<AdminGuests />} />
+        <Route path="check-in" element={<AdminCheckIn />} />
+        <Route path="payments" element={<AdminPayments />} />
         <Route path=":section" element={<AdminSectionPlaceholder />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

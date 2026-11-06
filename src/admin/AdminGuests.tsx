@@ -8,7 +8,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  CirclePlus,
   Clock3,
   Crown,
   FileText,
@@ -16,7 +15,6 @@ import {
   Mail,
   Pencil,
   Phone,
-  Plus,
   RefreshCw,
   Search,
   UserRound,
@@ -62,11 +60,11 @@ const guestMetadata: { country: string; countryCode: string; tier: GuestTier; me
 ]
 
 function createGuests(reservations: Reservation[]): Guest[] {
-  const seenEmails = new Set<string>()
+  const seenGuests = new Set<string>()
   return reservations.flatMap((reservation, index) => {
-    const email = reservation.email.toLowerCase()
-    if (seenEmails.has(email)) return []
-    seenEmails.add(email)
+    const identity = guestIdentity(reservation)
+    if (seenGuests.has(identity)) return []
+    seenGuests.add(identity)
     const metadata = guestMetadata[index % guestMetadata.length]
     return [{
       id: `OPZY-GST-${reservation.reference.slice(-4)}`,
@@ -77,6 +75,11 @@ function createGuests(reservations: Reservation[]): Guest[] {
       memberSince: reservation.registeredAt ?? metadata.memberSince,
     }]
   })
+}
+
+function guestIdentity(person: Pick<Guest, 'email' | 'phone'> | Pick<Reservation, 'email' | 'phone'>) {
+  const email = person.email.trim().toLowerCase()
+  return email ? `email:${email}` : `phone:${person.phone.replace(/\D/g, '')}`
 }
 
 const pageSize = 8
@@ -135,15 +138,15 @@ function exportGuests(guests: Guest[]) {
 }
 
 function GuestDialog({ guest, onClose, onSave }: {
-  guest?: Guest
+  guest: Guest
   onClose: () => void
   onSave: (draft: GuestDraft) => void
 }) {
-  const [name, setName] = useState(guest?.name ?? '')
-  const [email, setEmail] = useState(guest?.email ?? '')
-  const [phone, setPhone] = useState(guest?.phone ?? '')
-  const [country, setCountry] = useState(guest?.country ?? 'Nigeria')
-  const [tier, setTier] = useState<GuestTier>(guest?.tier ?? 'Standard Folio')
+  const [name, setName] = useState(guest.name)
+  const [email, setEmail] = useState(guest.email)
+  const [phone, setPhone] = useState(guest.phone)
+  const [country, setCountry] = useState(guest.country)
+  const [tier, setTier] = useState<GuestTier>(guest.tier)
   const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-[13px] text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
 
   function submitGuest(event: FormEvent<HTMLFormElement>) {
@@ -157,8 +160,8 @@ function GuestDialog({ guest, onClose, onSave }: {
         <header className="flex items-start justify-between border-b border-stone-200 bg-white px-5 py-4">
           <div>
             <p className="text-[11px] font-semibold tracking-[0.15em] text-amber-800">GUEST DIRECTORY</p>
-            <h2 id="guest-dialog-title" className="mt-1 font-display text-xl text-ink">{guest ? 'Edit Guest Profile' : 'Add New Guest'}</h2>
-            <p className="mt-1 text-[12px] text-muted">{guest ? 'Update contact details and guest classification.' : 'Register a guest in the OPZY hospitality registry.'}</p>
+            <h2 id="guest-dialog-title" className="mt-1 font-display text-xl text-ink">Edit Guest Profile</h2>
+            <p className="mt-1 text-[12px] text-muted">Update contact details and guest classification.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close guest form" className="grid size-8 place-items-center text-muted hover:bg-stone-100"><X aria-hidden="true" className="size-4" /></button>
         </header>
@@ -290,7 +293,7 @@ function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExt
   onClose: () => void
   onExtendStay: () => void
 }) {
-  const guestReservations = reservations.filter((reservation) => reservation.email.toLowerCase() === guest.email.toLowerCase())
+  const guestReservations = reservations.filter((reservation) => guestIdentity(reservation) === guestIdentity(guest))
   const completedStays = guestReservations.filter((reservation) => reservation.folio === 'Checked Out')
   const cancelledStays = guestReservations.filter((reservation) => reservation.folio === 'Cancelled')
   const lifetimeRevenue = guestReservations.reduce((total, reservation) => total + reservationPaidAmount(reservation), 0)
@@ -412,21 +415,21 @@ export function AdminGuests() {
 
   const registeredGuests = useMemo(() => {
     const reservationGuests = createGuests(reservations)
-    const emails = new Set(guests.map((guest) => guest.email.toLowerCase()))
-    const additions = reservationGuests.filter((guest) => !emails.has(guest.email.toLowerCase()))
+    const guestIdentities = new Set(guests.map(guestIdentity))
+    const additions = reservationGuests.filter((guest) => !guestIdentities.has(guestIdentity(guest)))
     return additions.length ? [...guests, ...additions] : guests
   }, [guests, reservations])
 
   const selectedGuest = registeredGuests.find((guest) => guest.id === selectedId)
   const selectedInHouseReservation = selectedGuest
-    ? reservations.find((reservation) => reservation.email.toLowerCase() === selectedGuest.email.toLowerCase() && reservation.folio === 'Checked In')
+    ? reservations.find((reservation) => guestIdentity(reservation) === guestIdentity(selectedGuest) && reservation.folio === 'Checked In')
     : undefined
   const returningCount = registeredGuests.filter((guest) => guest.returning).length
-  const inHouseCount = registeredGuests.filter((guest) => guestStatus(reservations.filter((reservation) => reservation.email.toLowerCase() === guest.email.toLowerCase())) === 'In-House').length
+  const inHouseCount = registeredGuests.filter((guest) => guestStatus(reservations.filter((reservation) => guestIdentity(reservation) === guestIdentity(guest))) === 'In-House').length
   const newThisMonth = registeredGuests.filter((guest) => guest.memberSince.slice(0, 7) === currentMonth).length
 
   const filteredGuests = useMemo(() => registeredGuests.filter((guest) => {
-    const relatedReservations = reservations.filter((reservation) => reservation.email.toLowerCase() === guest.email.toLowerCase())
+    const relatedReservations = reservations.filter((reservation) => guestIdentity(reservation) === guestIdentity(guest))
     const status = guestStatus(relatedReservations)
     const searchValue = `${guest.id} ${guest.name} ${guest.email} ${guest.phone}`.toLowerCase()
     return (!query.trim() || searchValue.includes(query.trim().toLowerCase()))
@@ -446,22 +449,10 @@ export function AdminGuests() {
   }
 
   function saveGuest(draft: GuestDraft) {
-    if (dialog === 'edit' && selectedGuest) {
-      setGuests((current) => current.map((guest) => guest.id === selectedGuest.id
-        ? { ...guest, ...draft, countryCode: countryCodeFor(draft.country) }
-        : guest))
-    } else {
-      const newGuest: Guest = {
-        ...draft,
-        id: `OPZY-GST-${String(Date.now()).slice(-4)}`,
-        countryCode: countryCodeFor(draft.country),
-        memberSince: new Date().toISOString().slice(0, 10),
-        returning: false,
-      }
-      setGuests((current) => [newGuest, ...current])
-      setSelectedId(newGuest.id)
-      setPage(1)
-    }
+    if (!selectedGuest) return
+    setGuests((current) => current.map((guest) => guest.id === selectedGuest.id
+      ? { ...guest, ...draft, countryCode: countryCodeFor(draft.country) }
+      : guest))
     setDialog(null)
   }
 
@@ -493,7 +484,6 @@ export function AdminGuests() {
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => exportGuests(filteredGuests)} className="inline-flex items-center justify-center gap-2 border border-stone-300 bg-white px-3 py-2.5 text-[11px] font-semibold text-ink hover:bg-stone-50"><ArrowDownToLine aria-hidden="true" className="size-3.5" /> Export Guest Registry (.CSV)</button>
-          <button type="button" onClick={() => setDialog('add')} className="inline-flex items-center justify-center gap-2 bg-amber-900 px-3 py-2.5 text-[11px] font-semibold text-white hover:bg-amber-950"><CirclePlus aria-hidden="true" className="size-3.5" /> Add New Guest</button>
         </div>
       </header>
 
@@ -550,7 +540,7 @@ export function AdminGuests() {
               </thead>
               <tbody className="divide-y divide-stone-100">
                 {visibleGuests.map((guest) => {
-                  const relatedReservations = reservations.filter((reservation) => reservation.email.toLowerCase() === guest.email.toLowerCase())
+                  const relatedReservations = reservations.filter((reservation) => guestIdentity(reservation) === guestIdentity(guest))
                   const status = guestStatus(relatedReservations)
                   const active = selectedId === guest.id
                   const currentStay = relatedReservations.find((reservation) => reservation.folio === 'Checked In')
@@ -583,8 +573,7 @@ export function AdminGuests() {
                   <tr><td colSpan={4} className="px-4 py-12 text-center">
                     <UsersRound aria-hidden="true" className="mx-auto size-6 text-muted" />
                     <p className="mt-2 font-display text-lg text-ink">No guests found</p>
-                    <p className="mt-1 text-[11px] text-muted">Try adjusting your filters or add a new guest.</p>
-                    <button type="button" onClick={() => setDialog('add')} className="mt-3 inline-flex items-center gap-1.5 bg-forest px-3 py-2 text-[10px] font-semibold text-white"><Plus aria-hidden="true" className="size-3" /> Add Guest</button>
+                    <p className="mt-1 text-[11px] text-muted">Try adjusting your filters.</p>
                   </td></tr>
                 )}
               </tbody>
@@ -612,9 +601,9 @@ export function AdminGuests() {
         <span className="ml-auto hidden items-center gap-1 font-mono sm:inline-flex"><Globe2 aria-hidden="true" className="size-3" /> SYSTEM SECURE · ENCRYPTED AUDIT FOLIO V4.1</span>
       </footer>
 
-      {(dialog === 'add' || dialog === 'edit') && (
+      {dialog === 'edit' && selectedGuest && (
         <GuestDialog
-          guest={dialog === 'edit' ? selectedGuest : undefined}
+          guest={selectedGuest}
           onClose={() => setDialog(null)}
           onSave={saveGuest}
         />
