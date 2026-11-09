@@ -24,6 +24,9 @@ import { AdminCheckIn } from '../admin/AdminCheckIn'
 import { AdminPayments } from '../admin/AdminPayments'
 import { AdminReports } from '../admin/AdminReports'
 import { AdminStaff } from '../admin/AdminStaff'
+import { SuperAdminDashboard } from '../admin/SuperAdminDashboard'
+import { EmailVerificationPage, HotelDashboardGate, HotelOnboardingPage } from '../components/HotelOnboardingPages'
+import { HotelAdminLoginPage, HotelAdminRegistrationPage, HotelForgotPasswordPage, HotelResetPasswordPage, SuperAdminLoginPage } from '../components/PortalAuthPages'
 
 function HomePage() {
   return (
@@ -62,7 +65,7 @@ export function AppRoutes() {
         <Route path="/book" element={<BookYourStayPage />} />
         <Route path="/contact" element={<ContactPage />} />
       </Route>
-      <Route path="/dashboard" element={<AdminLayout />}>
+      <Route path="/dashboard" element={<HotelDashboardGate><AdminLayout /></HotelDashboardGate>}>
         <Route index element={<Navigate to="overview" replace />} />
         <Route path="overview" element={<AdminDashboard />} />
         <Route path="reservations" element={<AdminReservations />} />
@@ -74,6 +77,14 @@ export function AppRoutes() {
         <Route path="staff" element={<AdminStaff />} />
         <Route path=":section" element={<AdminSectionPlaceholder />} />
       </Route>
+      <Route path="/hotel/login" element={<HotelAdminLoginPage />} />
+      <Route path="/hotel/register" element={<HotelAdminRegistrationPage />} />
+      <Route path="/hotel/forgot-password" element={<HotelForgotPasswordPage />} />
+      <Route path="/reset-password" element={<HotelResetPasswordPage />} />
+      <Route path="/hotel/onboarding" element={<HotelOnboardingPage />} />
+      <Route path="/verify-email" element={<EmailVerificationPage />} />
+      <Route path="/platform/login" element={<SuperAdminLoginPage />} />
+      <Route path="/super-admin" element={<SuperAdminDashboard />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

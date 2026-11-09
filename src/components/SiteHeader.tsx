@@ -36,6 +36,9 @@ export function SiteHeader() {
         </nav>
 
         <div className="hidden items-center gap-4 lg:flex">
+          <Link to="/hotel/login" className="text-[10px] font-semibold text-white/80 transition-colors hover:text-champagne">
+            HOTEL PORTAL
+          </Link>
           <button type="button" aria-label="Language: English" className="text-white/80 transition-colors hover:text-champagne">
             <Globe2 aria-hidden="true" className="h-4 w-4" />
           </button>
@@ -70,6 +73,9 @@ export function SiteHeader() {
               {link.label}
             </Link>
           ))}
+          <Link to="/hotel/login" onClick={() => setMenuOpen(false)} className="block border-b border-white/10 py-3 text-sm font-medium text-champagne hover:text-white">
+            Hotel Portal
+          </Link>
           <Link to="/book" onClick={() => setMenuOpen(false)} className="mt-4 flex items-center justify-center gap-2 bg-champagne px-4 py-3 text-xs font-semibold text-forest-deep">
             <CalendarDays aria-hidden="true" className="h-4 w-4" />
             BOOK YOUR STAY
