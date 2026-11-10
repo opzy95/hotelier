@@ -3,17 +3,18 @@ import type { FormEvent, ReactNode } from 'react'
 import { ArrowRight, Check, Hotel, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { ApiError, apiRequest } from '../api'
-import type { HotelOnboardingResponse, HotelPlan, PlatformProfileResponse } from '../api'
+import type { HotelOnboardingResponse, PlatformProfileResponse } from '../api'
 
-function OnboardingFrame({ eyebrow, title, description, children }: {
+function OnboardingFrame({ eyebrow, title, description, wide = false, children }: {
   eyebrow: string
   title: string
   description: string
+  wide?: boolean
   children: ReactNode
 }) {
   return (
     <main className="min-h-screen bg-[#faf9f6] px-4 py-10 font-body text-ink sm:px-8 sm:py-14">
-      <div className="mx-auto max-w-3xl">
+      <div className={`mx-auto ${wide ? 'max-w-5xl' : 'max-w-3xl'}`}>
         <Link to="/" className="inline-flex items-center gap-2 text-sm text-forest no-underline">
           <Hotel aria-hidden="true" className="size-5" /> OPZY HOSPITALITY
         </Link>
@@ -33,6 +34,31 @@ function Notice({ children, tone = 'error' }: { children: ReactNode; tone?: 'err
     ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
     : 'border-rose-200 bg-rose-50 text-rose-950'
   return <p role="status" className={`mt-4 border px-3 py-2.5 text-xs leading-5 ${styles}`}>{children}</p>
+}
+
+type OnboardingPlan = {
+  id: string
+  code: string
+  name: string
+  description: string
+  trialDays: number
+  features: string[]
+  prices: {
+    amount: number
+    currency: string
+    billingInterval: string
+  }[]
+}
+
+type OnboardingPlanOption = {
+  key: string
+  id: string
+  code: string
+  name: string
+  description: string
+  trialDays: number
+  features: string[]
+  price?: OnboardingPlan['prices'][number]
 }
 
 export function EmailVerificationPage() {
@@ -143,16 +169,111 @@ export function EmailVerificationPage() {
   )
 }
 
-function formatPlanPrice(plan: HotelPlan) {
-  const fractionDigits = new Intl.NumberFormat(undefined, {
+function formatPlanPrice(price: OnboardingPlan['prices'][number]) {
+  const formattedPrice = new Intl.NumberFormat(undefined, {
     style: 'currency',
-    currency: plan.currency,
-  }).resolvedOptions().maximumFractionDigits ?? 2
-  const price = new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: plan.currency,
-  }).format(plan.amountMinor / 10 ** fractionDigits)
-  return `${price} / ${plan.interval === 'month' ? 'month' : 'year'}`
+    currency: price.currency,
+    maximumFractionDigits: 2,
+  }).format(price.amount)
+  const months = Number(price.billingInterval.match(/^\d+/)?.[0])
+  const interval = Number.isFinite(months)
+    ? `${months} ${months === 1 ? 'month' : 'months'}`
+    : price.billingInterval.replace(/_/g, ' ')
+  return `${formattedPrice} / ${interval}`
+}
+
+function isPlanDefinition(value: unknown): value is {
+  id: string
+  code: string
+  name: string
+  description: string
+  trial_days: number
+  sort_order: number
+  features: Record<string, boolean>
+} {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('id' in value) || !('code' in value) || !('name' in value) || !('description' in value) || !('trial_days' in value) || !('sort_order' in value) || !('features' in value)) return false
+  if (typeof value.features !== 'object' || value.features === null || Array.isArray(value.features)) return false
+
+  return typeof value.id === 'string'
+    && value.id.length > 0
+    && typeof value.code === 'string'
+    && typeof value.name === 'string'
+    && typeof value.description === 'string'
+    && typeof value.trial_days === 'number'
+    && Number.isFinite(value.trial_days)
+    && typeof value.sort_order === 'number'
+    && Number.isFinite(value.sort_order)
+    && Object.values(value.features).every((feature) => typeof feature === 'boolean')
+}
+
+function isPlanPrice(value: unknown): value is {
+  plan_code: string
+  billing_interval: string
+  amount: number
+  currency: string
+} {
+  if (typeof value !== 'object' || value === null) return false
+  if (!('plan_code' in value) || !('billing_interval' in value) || !('amount' in value) || !('currency' in value)) return false
+
+  return typeof value.plan_code === 'string'
+    && typeof value.billing_interval === 'string'
+    && typeof value.amount === 'number'
+    && Number.isFinite(value.amount)
+    && typeof value.currency === 'string'
+}
+
+function getPublicPlans(payload: unknown): OnboardingPlan[] {
+  if (typeof payload !== 'object' || payload === null || !('plans' in payload) || !Array.isArray(payload.plans) || !('plan_prices' in payload) || !Array.isArray(payload.plan_prices)) {
+    throw new Error('The hotel API returned an invalid plans response.')
+  }
+  if (!payload.plans.every(isPlanDefinition) || !payload.plan_prices.every(isPlanPrice)) {
+    throw new Error('The hotel API returned an invalid plans response.')
+  }
+
+  const pricesByPlan = new Map<string, OnboardingPlan['prices']>()
+  for (const price of payload.plan_prices) {
+    const prices = pricesByPlan.get(price.plan_code) ?? []
+    prices.push({
+      amount: price.amount,
+      currency: price.currency,
+      billingInterval: price.billing_interval,
+    })
+    pricesByPlan.set(price.plan_code, prices)
+  }
+
+  return [...payload.plans]
+    .sort((left, right) => left.sort_order - right.sort_order)
+    .map((plan) => ({
+      id: plan.id,
+      code: plan.code,
+      name: plan.name,
+      description: plan.description,
+      trialDays: plan.trial_days,
+      features: Object.entries(plan.features)
+        .filter(([, enabled]) => enabled)
+        .map(([feature]) => feature.replace(/_/g, ' ')),
+      prices: pricesByPlan.get(plan.code) ?? [],
+    }))
+}
+
+function getPlanOptions(plans: OnboardingPlan[]): OnboardingPlanOption[] {
+  return plans.flatMap((plan) => {
+    const options = plan.prices.length > 0
+      ? [...plan.prices].sort((left, right) => Number(right.billingInterval.match(/^\d+/)?.[0] ?? 0) - Number(left.billingInterval.match(/^\d+/)?.[0] ?? 0))
+      : [undefined]
+
+    return options.map((price) => ({
+      key: `${plan.code}-${price?.billingInterval ?? 'trial'}`,
+      id: plan.id,
+      code: plan.code,
+      name: plan.name,
+      description: plan.description,
+      trialDays: plan.trialDays,
+      features: plan.features,
+      price,
+    }))
+  })
 }
 
 function LoadingPanel() {
@@ -214,7 +335,7 @@ export function HotelOnboardingPage() {
   const [token] = useState(() => sessionStorage.getItem('hotelAccessToken') ?? '')
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
   const [onboarding, setOnboarding] = useState<HotelOnboardingResponse | null>(null)
-  const [plans, setPlans] = useState<HotelPlan[]>([])
+  const [plans, setPlans] = useState<OnboardingPlan[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -237,8 +358,9 @@ export function HotelOnboardingPage() {
         if (cancelled) return
         setOnboarding(current)
         if (current.currentStep === 'choose_plan') {
-          const result = await apiRequest<{ data: HotelPlan[] }>('/public/plans')
-          if (!cancelled) setPlans(result.data)
+          const result = await apiRequest<unknown>('/public/plans')
+          const availablePlans = getPublicPlans(result)
+          if (!cancelled) setPlans(availablePlans)
         }
       } catch (requestError) {
         if (!cancelled) {
@@ -259,13 +381,13 @@ export function HotelOnboardingPage() {
     return () => { cancelled = true }
   }, [hotelId, navigate, reloadKey, token])
 
-  async function selectPlan(planId: string) {
+  async function selectPlan(planId: string, billingInterval?: string) {
     setSaving(true)
     setError('')
     try {
       const result = await apiRequest<{ paymentRequired: boolean }>(`/hotels/${encodeURIComponent(hotelId)}/subscription`, {
         method: 'PUT',
-        body: JSON.stringify({ planId }),
+        body: JSON.stringify({ planId, ...(billingInterval ? { billingInterval } : {}) }),
       }, token)
       setPaymentNotice(result.paymentRequired)
       setReloadKey((key) => key + 1)
@@ -295,8 +417,10 @@ export function HotelOnboardingPage() {
   if (!token || !hotelId) return <Navigate to="/hotel/login" replace />
   if (onboarding?.currentStep === 'complete' && !loading) return <Navigate to="/dashboard/overview" replace />
 
+  const planOptions = getPlanOptions(plans)
+
   return (
-    <OnboardingFrame eyebrow="HOTEL SETUP" title="Let’s prepare your hotel" description="Choose a subscription and configure the essential settings before opening your hotel workspace.">
+    <OnboardingFrame wide eyebrow="HOTEL SETUP" title="Let’s prepare your hotel" description="Choose a subscription and configure the essential settings before opening your hotel workspace.">
       <div className="mb-6 flex items-center gap-2 text-[10px] font-semibold tracking-wide text-muted">
         <span className={`inline-flex items-center gap-1.5 ${onboarding?.currentStep !== 'choose_plan' ? 'text-forest' : 'text-amber-800'}`}><span className="grid size-5 place-items-center rounded-full border border-current">1</span> PLAN</span>
         <span className="h-px flex-1 bg-stone-200" />
@@ -309,21 +433,47 @@ export function HotelOnboardingPage() {
         <><Notice>{error}</Notice><button type="button" onClick={() => { setReloadKey((key) => key + 1) }} className="mt-4 text-xs font-semibold text-forest underline-offset-2 hover:underline">Try again</button></>
       ) : onboarding?.currentStep === 'choose_plan' ? (
         <section>
-          <h2 className="font-display text-xl">Choose a plan</h2>
-          <p className="mt-1 text-xs text-muted">You can continue to hotel setup after selecting a plan.</p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[9px] font-semibold tracking-[0.16em] text-amber-800">STEP 1 OF 3</p>
+              <h2 className="mt-1 font-display text-2xl">Find the right plan for your hotel</h2>
+              <p className="mt-1 max-w-xl text-xs leading-5 text-muted">Start with a free trial or choose a Professional billing period. You can continue to hotel setup after selecting a plan.</p>
+            </div>
+            <p className="shrink-0 text-[10px] text-muted">All plans include the features below</p>
+          </div>
           {error && <Notice>{error}</Notice>}
-          {plans.length === 0 ? <Notice>No active plans are available yet. Please contact the platform administrator.</Notice> : (
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              {plans.map((plan) => (
-                <article key={plan._id} className="flex flex-col border border-stone-200 p-4">
-                  <h3 className="font-display text-lg">{plan.name}</h3>
-                  <p className="mt-1 text-sm font-semibold text-forest">{formatPlanPrice(plan)}</p>
-                  {plan.trialDays > 0 && <p className="mt-1 text-[10px] text-muted">{plan.trialDays}-day free trial</p>}
-                  <ul className="my-4 flex-1 space-y-2 text-xs text-muted">
-                    {plan.features.map((feature) => <li key={feature} className="flex gap-2"><Check aria-hidden="true" className="size-3.5 shrink-0 text-forest" />{feature}</li>)}
+          {plans.length === 0 ? error ? (
+            <button type="button" onClick={() => { setReloadKey((key) => key + 1) }} className="mt-4 text-xs font-semibold text-forest underline-offset-2 hover:underline">Try again</button>
+          ) : <Notice>No active plans are available yet. Please contact the platform administrator.</Notice> : (
+            <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {planOptions.map((option, index) => (
+                <article key={option.key} className={`flex min-w-0 flex-col rounded-sm border bg-white p-5 shadow-sm ${index === 0 ? 'border-amber-700/50 ring-1 ring-amber-700/10' : 'border-stone-200'}`}>
+                  <div className="flex min-h-6 items-center justify-between gap-2">
+                    <span className="text-[9px] font-semibold tracking-[0.14em] text-amber-800">{option.price ? option.price.billingInterval.replace(/_/g, ' ').toUpperCase() : 'NO PAYMENT REQUIRED'}</span>
+                    {index === 0 && <span className="bg-amber-50 px-2 py-1 text-[9px] font-semibold text-amber-900">GET STARTED</span>}
+                  </div>
+                  <h3 className="mt-3 font-display text-xl">{option.name}</h3>
+                  <p className="mt-2 min-h-10 text-xs leading-5 text-muted">{option.description}</p>
+                  <div className="mt-4 min-h-[58px]">
+                    {option.price ? (
+                      <>
+                        <p className="text-lg font-semibold text-forest">{formatPlanPrice(option.price)}</p>
+                        <p className="mt-1 text-[10px] text-muted">Billed every {option.price.billingInterval.replace(/_/g, ' ')}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-lg font-semibold text-forest">Free</p>
+                        <p className="mt-1 text-[10px] text-muted">{option.trialDays}-day free trial</p>
+                      </>
+                    )}
+                  </div>
+                  <div className="my-4 h-px bg-stone-200" />
+                  <p className="text-[9px] font-semibold tracking-[0.12em] text-ink">INCLUDED FEATURES</p>
+                  <ul className="my-3 flex-1 space-y-2 text-[11px] leading-4 text-muted">
+                    {option.features.map((feature) => <li key={feature} className="flex gap-2"><Check aria-hidden="true" className="size-3.5 shrink-0 text-forest" /><span className="capitalize">{feature}</span></li>)}
                   </ul>
-                  <button type="button" disabled={saving} onClick={() => { void selectPlan(plan._id) }} className="flex min-h-10 items-center justify-center gap-2 bg-forest px-3 text-[10px] font-semibold tracking-wide text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">
-                    {saving ? 'SAVING…' : 'CHOOSE PLAN'} {!saving && <ArrowRight aria-hidden="true" className="size-3.5" />}
+                  <button type="button" disabled={saving} onClick={() => { void selectPlan(option.id, option.price?.billingInterval) }} className="mt-4 flex min-h-11 items-center justify-center gap-2 bg-forest px-3 text-[10px] font-semibold tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">
+                    {saving ? 'SAVING…' : 'CHOOSE THIS PLAN'} {!saving && <ArrowRight aria-hidden="true" className="size-3.5" />}
                   </button>
                 </article>
               ))}
