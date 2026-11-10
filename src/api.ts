@@ -158,9 +158,36 @@ export type PlatformHotel = {
   address: {
     country: string
     city?: string
+    line1?: string
+    line2?: string
+    region?: string
+    postalCode?: string
   }
   slug: string
   status: 'pending_approval' | 'active' | 'suspended'
+  type?: string
+  roomCount?: number
+  manager?: {
+    name?: string
+    email?: string
+    phone?: string
+  }
+  settings?: {
+    timezone?: string
+    locale?: string
+    currency?: string
+    checkInTime?: string
+    checkOutTime?: string
+  }
+  setupCompletedSteps?: string[]
+  subscription?: {
+    status?: string
+    plan?: {
+      name?: string
+      code?: string
+    } | null
+    trialEndsAt?: string
+  } | null
   createdAt?: string
 }
 

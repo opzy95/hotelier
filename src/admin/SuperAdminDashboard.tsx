@@ -8,15 +8,19 @@ import {
   ChevronRight,
   CircleHelp,
   CirclePause,
+  Ellipsis,
+  Eye,
   Globe2,
   LayoutDashboard,
   MapPin,
   Menu,
+  Play,
   Search,
   ShieldCheck,
   X,
 } from 'lucide-react'
 import { Link, Navigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { ApiError, apiRequest } from '../api'
 import type { PlatformHotelsResponse, PlatformProfileResponse } from '../api'
 
@@ -32,9 +36,9 @@ function normalizeHotel(hotel: ApiHotel): Hotel {
   return { ...hotel, id }
 }
 
-function displayStatus(status: ApiHotel['status']): HotelStatus {
-  if (status === 'active') return 'Active'
-  if (status === 'suspended') return 'Paused'
+function displayStatus(hotel: ApiHotel): HotelStatus {
+  if (hotel.status === 'suspended') return 'Paused'
+  if (hotel.status === 'active' || hotel.subscription?.status === 'active' || hotel.subscription?.status === 'trialing') return 'Active'
   return 'Onboarding'
 }
 
@@ -67,6 +71,9 @@ export function SuperAdminDashboard() {
   const [error, setError] = useState('')
   const [updatingHotelId, setUpdatingHotelId] = useState<string | null>(null)
   const [statusError, setStatusError] = useState('')
+  const [openActionMenuHotelId, setOpenActionMenuHotelId] = useState<string | null>(null)
+  const [actionMenuPosition, setActionMenuPosition] = useState<{ top: number; left: number } | null>(null)
+  const [selectedHotel, setSelectedHotel] = useState<Hotel | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
@@ -106,23 +113,48 @@ export function SuperAdminDashboard() {
     return () => { cancelled = true }
   }, [accessToken, page, reloadKey])
 
+  useEffect(() => {
+    if (!openActionMenuHotelId) return
+
+    function dismissActionMenu(event: Event) {
+      if (event instanceof KeyboardEvent && event.key !== 'Escape') return
+      if (event.type === 'pointerdown') {
+        const target = event.target
+        if (target instanceof Element && (target.closest('[data-hotel-action-trigger]') || target.closest('[data-hotel-action-menu]'))) return
+      }
+      setOpenActionMenuHotelId(null)
+      setActionMenuPosition(null)
+    }
+
+    document.addEventListener('pointerdown', dismissActionMenu)
+    document.addEventListener('keydown', dismissActionMenu)
+    window.addEventListener('resize', dismissActionMenu)
+    window.addEventListener('scroll', dismissActionMenu, true)
+    return () => {
+      document.removeEventListener('pointerdown', dismissActionMenu)
+      document.removeEventListener('keydown', dismissActionMenu)
+      window.removeEventListener('resize', dismissActionMenu)
+      window.removeEventListener('scroll', dismissActionMenu, true)
+    }
+  }, [openActionMenuHotelId])
+
   const query = search.trim().toLowerCase()
   const filteredHotels = useMemo(() => hotels.filter((hotel) => {
-    const status = displayStatus(hotel.status)
+    const status = displayStatus(hotel)
     const matchesSearch = !query || `${hotel.name} ${hotel.slug} ${hotel.address?.city ?? ''} ${hotel.address?.country ?? ''} ${hotel.email}`.toLowerCase().includes(query)
     return matchesSearch && (filter === 'All hotels' || status === filter)
   }), [filter, hotels, query])
 
-  const activeCount = hotels.filter((hotel) => hotel.status === 'active').length
-  const onboardingCount = hotels.filter((hotel) => hotel.status === 'pending_approval').length
-  const pausedCount = hotels.filter((hotel) => hotel.status === 'suspended').length
+  const activeCount = hotels.filter((hotel) => displayStatus(hotel) === 'Active').length
+  const onboardingCount = hotels.filter((hotel) => displayStatus(hotel) === 'Onboarding').length
+  const pausedCount = hotels.filter((hotel) => displayStatus(hotel) === 'Paused').length
   const totalPages = Math.max(1, Math.ceil(totalHotels / pageSize))
   const userName = profile?.name || 'Platform Admin'
   const userInitials = userName.split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'SA'
 
   async function toggleHotelStatus(hotel: Hotel) {
     if (!accessToken || updatingHotelId) return
-    const nextStatus = hotel.status === 'active' ? 'suspended' : 'active'
+    const nextStatus = displayStatus(hotel) === 'Active' ? 'suspended' : 'active'
     setUpdatingHotelId(hotel.id)
     setStatusError('')
     try {
@@ -243,14 +275,75 @@ export function SuperAdminDashboard() {
                 <tbody className="divide-y divide-stone-100">
                   {isLoading && <tr><td colSpan={5} className="px-4 py-12 text-center text-[10px] text-muted">Loading hotels from the backend…</td></tr>}
                   {!isLoading && filteredHotels.map((hotel) => {
-                    const status = displayStatus(hotel.status)
+                    const status = displayStatus(hotel)
                     return (
                       <tr key={hotel.id} className="text-[10px] hover:bg-[#fbfcfa]">
                         <td className="px-4 py-3.5"><div className="flex items-center gap-2.5"><span className="grid size-9 shrink-0 place-items-center border border-stone-200 bg-[#f5f6f3] text-forest"><Building2 aria-hidden="true" className="size-4" /></span><span className="min-w-0"><strong className="block truncate font-semibold text-ink">{hotel.name}</strong><span className="mt-1 block text-[9px] text-muted">Slug: {hotel.slug}</span></span></div></td>
                         <td className="px-4 py-3.5"><span className="flex items-center gap-1.5 text-ink"><MapPin aria-hidden="true" className="size-3 shrink-0 text-muted" />{hotel.address?.city ? `${hotel.address.city}, ` : ''}{hotel.address?.country || '—'}</span></td>
                         <td className="px-4 py-3.5"><strong className="block font-medium text-ink">{hotel.email}</strong><span className="mt-1 block text-[9px] text-muted">{hotel.phone}</span></td>
                         <td className="px-4 py-3.5"><StatusBadge status={status} /></td>
-                        <td className="px-4 py-3.5"><button type="button" onClick={() => { void toggleHotelStatus(hotel) }} disabled={updatingHotelId !== null || status === 'Onboarding'} title={status === 'Onboarding' ? 'Complete hotel onboarding before activation.' : undefined} className="whitespace-nowrap border border-stone-300 px-2.5 py-1.5 text-[9px] font-semibold text-ink hover:border-forest hover:text-forest disabled:cursor-not-allowed disabled:opacity-50">{updatingHotelId === hotel.id ? 'Updating…' : status === 'Paused' ? 'Activate' : status === 'Active' ? 'Suspend' : 'Onboarding'}</button></td>
+                        <td className="px-4 py-3.5">
+                          <div className="relative">
+                            <button
+                              type="button"
+                              aria-label={`Actions for ${hotel.name}`}
+                              aria-haspopup="menu"
+                              aria-expanded={openActionMenuHotelId === hotel.id}
+                              data-hotel-action-trigger
+                              onClick={(event) => {
+                                if (openActionMenuHotelId === hotel.id) {
+                                  setOpenActionMenuHotelId(null)
+                                  setActionMenuPosition(null)
+                                  return
+                                }
+                                const bounds = event.currentTarget.getBoundingClientRect()
+                                const menuWidth = 176
+                                const menuHeight = 92
+                                const top = bounds.bottom + menuHeight + 8 <= window.innerHeight
+                                  ? bounds.bottom + 4
+                                  : Math.max(8, bounds.top - menuHeight - 4)
+                                setActionMenuPosition({
+                                  top,
+                                  left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
+                                })
+                                setOpenActionMenuHotelId(hotel.id)
+                              }}
+                              className="grid size-8 place-items-center border border-stone-200 text-ink hover:border-forest hover:text-forest"
+                            >
+                              <Ellipsis aria-hidden="true" className="size-4" />
+                            </button>
+                            {openActionMenuHotelId === hotel.id && actionMenuPosition && createPortal(
+                              <div role="menu" aria-label={`${hotel.name} actions`} data-hotel-action-menu className="fixed z-[80] w-44 border border-stone-200 bg-white p-1 shadow-xl" style={actionMenuPosition}>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setSelectedHotel(hotel); setOpenActionMenuHotelId(null) }}
+                                  className="flex min-h-9 w-full items-center gap-2 px-2 text-left text-[10px] text-ink hover:bg-stone-50"
+                                >
+                                  <Eye aria-hidden="true" className="size-3.5 text-muted" /> View profile
+                                </button>
+                                {status !== 'Onboarding' ? (
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    disabled={updatingHotelId !== null}
+                                    onClick={() => { setOpenActionMenuHotelId(null); void toggleHotelStatus(hotel) }}
+                                    className="flex min-h-9 w-full items-center gap-2 px-2 text-left text-[10px] text-ink hover:bg-stone-50 disabled:opacity-50"
+                                  >
+                                    {status === 'Paused'
+                                      ? <><Play aria-hidden="true" className="size-3.5 text-emerald-700" /> Activate</>
+                                      : <><CirclePause aria-hidden="true" className="size-3.5 text-rose-700" />{updatingHotelId === hotel.id ? 'Suspending…' : 'Suspend'}</>}
+                                  </button>
+                                ) : (
+                                  <span role="menuitem" aria-disabled="true" className="flex min-h-9 items-center gap-2 px-2 text-[10px] text-muted">
+                                    <CirclePause aria-hidden="true" className="size-3.5" /> Status action unavailable
+                                  </span>
+                                )}
+                              </div>,
+                              document.body,
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     )
                   })}
@@ -271,6 +364,56 @@ export function SuperAdminDashboard() {
           <footer className="mt-5 flex flex-col gap-2 text-[9px] text-muted sm:flex-row sm:items-center sm:justify-between"><span>© {currentYear} OPZY PLATFORM · SUPER ADMIN</span><Link to="/" className="inline-flex items-center gap-1 text-forest hover:underline"><Globe2 aria-hidden="true" className="size-3" /> View public hotel site</Link></footer>
         </div>
       </main>
+      {selectedHotel && (
+        <div className="fixed inset-0 z-[60] grid place-items-center overflow-y-auto bg-ink/50 p-4" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setSelectedHotel(null)
+        }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="hotel-profile-title" className="my-auto max-h-[90vh] w-full max-w-2xl overflow-y-auto border border-stone-200 bg-white shadow-xl">
+            <header className="flex items-start justify-between gap-4 border-b border-stone-100 px-5 py-4 sm:px-6">
+              <div>
+                <p className="text-[9px] font-semibold tracking-[0.15em] text-amber-800">HOTEL PROFILE</p>
+                <h2 id="hotel-profile-title" className="mt-1 font-display text-2xl text-ink">{selectedHotel.name}</h2>
+                <p className="mt-1 text-[10px] text-muted">{selectedHotel.slug}</p>
+              </div>
+              <button type="button" aria-label="Close hotel profile" onClick={() => setSelectedHotel(null)} className="grid size-8 shrink-0 place-items-center text-muted hover:bg-stone-100 hover:text-ink"><X aria-hidden="true" className="size-4" /></button>
+            </header>
+            <div className="grid gap-5 p-5 sm:grid-cols-2 sm:p-6">
+              <section className="space-y-3">
+                <h3 className="text-[9px] font-semibold tracking-[0.12em] text-muted">CONTACT & LOCATION</h3>
+                <dl className="space-y-2 text-[11px]">
+                  <div><dt className="text-[9px] text-muted">Email</dt><dd className="break-all text-ink">{selectedHotel.email}</dd></div>
+                  <div><dt className="text-[9px] text-muted">Phone</dt><dd className="text-ink">{selectedHotel.phone || '—'}</dd></div>
+                  {selectedHotel.manager && <div><dt className="text-[9px] text-muted">Manager</dt><dd className="text-ink">{selectedHotel.manager.name || selectedHotel.manager.email || '—'}</dd></div>}
+                  <div><dt className="text-[9px] text-muted">Address</dt><dd className="text-ink">{[selectedHotel.address.line1, selectedHotel.address.line2, selectedHotel.address.city, selectedHotel.address.region, selectedHotel.address.postalCode, selectedHotel.address.country].filter(Boolean).join(', ') || '—'}</dd></div>
+                </dl>
+              </section>
+              <section className="space-y-3">
+                <h3 className="text-[9px] font-semibold tracking-[0.12em] text-muted">ACCOUNT</h3>
+                <dl className="space-y-2 text-[11px]">
+                  <div><dt className="text-[9px] text-muted">Status</dt><dd className="mt-1"><StatusBadge status={displayStatus(selectedHotel)} /></dd></div>
+                  <div><dt className="text-[9px] text-muted">Subscription</dt><dd className="text-ink">{selectedHotel.subscription?.plan?.name ?? selectedHotel.subscription?.plan?.code ?? 'No plan'}{selectedHotel.subscription?.status ? ` · ${selectedHotel.subscription.status}` : ''}</dd></div>
+                  {selectedHotel.subscription?.trialEndsAt && <div><dt className="text-[9px] text-muted">Trial ends</dt><dd className="text-ink">{new Date(selectedHotel.subscription.trialEndsAt).toLocaleDateString()}</dd></div>}
+                  <div><dt className="text-[9px] text-muted">Property type</dt><dd className="capitalize text-ink">{selectedHotel.type || '—'}</dd></div>
+                  <div><dt className="text-[9px] text-muted">Rooms</dt><dd className="text-ink">{selectedHotel.roomCount ?? '—'}</dd></div>
+                  {selectedHotel.createdAt && <div><dt className="text-[9px] text-muted">Registered</dt><dd className="text-ink">{new Date(selectedHotel.createdAt).toLocaleDateString()}</dd></div>}
+                </dl>
+              </section>
+              {selectedHotel.settings && (
+                <section className="sm:col-span-2">
+                  <h3 className="mb-3 text-[9px] font-semibold tracking-[0.12em] text-muted">HOTEL SETTINGS</h3>
+                  <dl className="grid grid-cols-2 gap-3 border border-stone-100 bg-stone-50/60 p-3 text-[11px] sm:grid-cols-3">
+                    <div><dt className="text-[9px] text-muted">Timezone</dt><dd className="text-ink">{selectedHotel.settings.timezone || '—'}</dd></div>
+                    <div><dt className="text-[9px] text-muted">Language</dt><dd className="text-ink">{selectedHotel.settings.locale || '—'}</dd></div>
+                    <div><dt className="text-[9px] text-muted">Currency</dt><dd className="text-ink">{selectedHotel.settings.currency || '—'}</dd></div>
+                    <div><dt className="text-[9px] text-muted">Check-in</dt><dd className="text-ink">{selectedHotel.settings.checkInTime || '—'}</dd></div>
+                    <div><dt className="text-[9px] text-muted">Check-out</dt><dd className="text-ink">{selectedHotel.settings.checkOutTime || '—'}</dd></div>
+                  </dl>
+                </section>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   )
 }
