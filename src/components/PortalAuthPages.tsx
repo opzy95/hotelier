@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Building2, Eye, EyeOff, Hotel, LockKeyhole, Mail, MapPin, ShieldCheck, Sparkles, UserRound } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { apiRequest } from '../api'
+import { ApiError, apiRequest } from '../api'
 import type { HotelMembership, PlatformLoginResponse, PlatformProfileResponse } from '../api'
 import heroImage from '../img/Opzy Luxury Hotel infinity lagoon pool at twilight in Victoria Island.png'
 
@@ -94,6 +94,7 @@ function PasswordField({ label = 'PASSWORD', autoComplete = 'current-password', 
 export function HotelAdminLoginPage() {
   const navigate = useNavigate()
   const [notice, setNotice] = useState('')
+  const [needsVerification, setNeedsVerification] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hotelChoices, setHotelChoices] = useState<HotelMembership[]>([])
   const [pendingToken, setPendingToken] = useState('')
@@ -101,6 +102,7 @@ export function HotelAdminLoginPage() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setNotice('')
+    setNeedsVerification(false)
     setIsSubmitting(true)
     const formData = new FormData(event.currentTarget)
     const email = String(formData.get('email') ?? '').trim()
@@ -118,9 +120,17 @@ export function HotelAdminLoginPage() {
         return
       }
 
+      sessionStorage.removeItem('pendingVerificationEmail')
       setPendingToken(token)
       setHotelChoices(memberships)
     } catch (error) {
+      const isVerificationError = (error instanceof ApiError && error.code === 'email_not_verified') || (error instanceof Error && /verify|verification|not verified|email_not_verified/i.test(error.message))
+      if (isVerificationError) {
+        sessionStorage.setItem('pendingVerificationEmail', email)
+        setNeedsVerification(true)
+        setNotice('Your email has not been verified yet. Verify it to continue.')
+        return
+      }
       setNotice(error instanceof Error ? error.message : 'Sign-in failed. Please try again.')
     } finally {
       setIsSubmitting(false)
@@ -143,7 +153,7 @@ export function HotelAdminLoginPage() {
               <span>{hotel.hotelName}</span><ArrowRight aria-hidden="true" className="size-4 text-forest" />
             </button>
           ))}
-          <button type="button" onClick={() => { setHotelChoices([]); setPendingToken('') }} className="w-full py-2 text-[10px] font-semibold text-forest underline-offset-2 hover:underline">Use another account</button>
+          <button type="button" onClick={() => { setHotelChoices([]); setPendingToken(''); sessionStorage.removeItem('pendingVerificationEmail') }} className="w-full py-2 text-[10px] font-semibold text-forest underline-offset-2 hover:underline">Use another account</button>
         </div>
       ) : (
         <form onSubmit={(event) => { void submit(event) }} className="space-y-5">
@@ -154,6 +164,11 @@ export function HotelAdminLoginPage() {
           </div>
           <button type="submit" disabled={isSubmitting} className="group mt-1 flex min-h-12 w-full items-center justify-center gap-2 bg-forest px-4 py-3 text-[10px] font-semibold tracking-[0.12em] text-white shadow-sm transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">{isSubmitting ? 'SIGNING IN…' : 'SIGN IN'} {!isSubmitting && <ArrowRight aria-hidden="true" className="size-3.5 transition-transform group-hover:translate-x-1" />}</button>
           {notice && <PreviewNotice message={notice} />}
+          {needsVerification && (
+            <div className="mt-3 text-center">
+              <Link to="/verify-email" className="inline-flex items-center justify-center gap-2 text-[10px] font-semibold text-forest underline-offset-2 hover:underline">Verify your email now <ArrowRight aria-hidden="true" className="size-3.5" /></Link>
+            </div>
+          )}
           <div className="border-t border-stone-200 pt-4 text-center">
             <p className="text-[10px] text-muted">New to the platform? <Link to="/hotel/register" className="font-semibold text-forest underline-offset-2 hover:underline">Register your hotel</Link></p>
           </div>
@@ -309,6 +324,7 @@ export function HotelAdminRegistrationPage() {
       if (!result.emailVerificationRequired) {
         throw new Error('Registration completed without an email verification requirement. Please contact the platform administrator.')
       }
+      sessionStorage.setItem('pendingVerificationEmail', registration.manager.email)
       setVerificationEmail(registration.manager.email)
       form.reset()
     } catch (error) {
@@ -323,13 +339,14 @@ export function HotelAdminRegistrationPage() {
     setNotice('')
     setIsResending(true)
     try {
-      await apiRequest<{ message: string }>('/auth/resend-verification', {
+      await apiRequest<{ message: string }>('/auth/send-verification-code', {
         method: 'POST',
         body: JSON.stringify({ email: verificationEmail }),
       })
-      setNotice('If your account still needs verification, a new email has been sent.')
+      sessionStorage.setItem('pendingVerificationEmail', verificationEmail)
+      setNotice('A new 6-digit verification code has been sent to your email.')
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not resend the verification email.')
+      setNotice(error instanceof Error ? error.message : 'Could not send the verification code. Please try again.')
     } finally {
       setIsResending(false)
     }
@@ -339,10 +356,10 @@ export function HotelAdminRegistrationPage() {
     <PortalFrame eyebrow="HOTEL TEAM PORTAL" title="Register your hotel" description="Create a hotel profile and the first administrator account for your team." previewOnly={false}>
       {verificationEmail ? (
         <div className="border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm leading-6 text-emerald-950" role="status">
-          <p className="font-semibold">Check your inbox to verify your email.</p>
-          <p className="mt-1 text-xs">We sent a verification link to <strong>{verificationEmail}</strong>. Verify your account, then sign in to choose a plan and finish setting up your hotel.</p>
-          <Link to="/hotel/login" className="mt-4 inline-flex items-center gap-2 text-xs font-semibold text-forest underline-offset-2 hover:underline">Continue to sign in <ArrowRight aria-hidden="true" className="size-3.5" /></Link>
-          <button type="button" onClick={() => { void resendVerificationEmail() }} disabled={isResending} className="mt-3 block text-xs font-semibold text-forest underline-offset-2 hover:underline disabled:opacity-60">{isResending ? 'Sending…' : 'Resend verification email'}</button>
+          <p className="font-semibold">Check your inbox for a 6-digit verification code.</p>
+          <p className="mt-1 text-xs">We sent a code to <strong>{verificationEmail}</strong>. Enter it in the verification page to continue setting up your hotel.</p>
+          <Link to="/verify-email" className="mt-4 inline-flex items-center gap-2 text-xs font-semibold text-forest underline-offset-2 hover:underline">Continue to verification <ArrowRight aria-hidden="true" className="size-3.5" /></Link>
+          <button type="button" onClick={() => { void resendVerificationEmail() }} disabled={isResending} className="mt-3 block text-xs font-semibold text-forest underline-offset-2 hover:underline disabled:opacity-60">{isResending ? 'Sending…' : 'Resend verification code'}</button>
           {notice && <p role="status" className="mt-2 text-xs text-muted">{notice}</p>}
         </div>
       ) : <form onSubmit={(event) => { void submit(event) }} className="space-y-5">
@@ -415,11 +432,13 @@ export function HotelAdminRegistrationPage() {
 export function SuperAdminLoginPage() {
   const navigate = useNavigate()
   const [notice, setNotice] = useState('')
+  const [needsVerification, setNeedsVerification] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setNotice('')
+    setNeedsVerification(false)
     setIsSubmitting(true)
 
     const formData = new FormData(event.currentTarget)
@@ -440,6 +459,13 @@ export function SuperAdminLoginPage() {
       sessionStorage.setItem('platformAccessToken', token)
       navigate('/super-admin', { replace: true })
     } catch (error) {
+      const isVerificationError = (error instanceof ApiError && error.code === 'email_not_verified') || (error instanceof Error && /verify|verification|not verified|email_not_verified/i.test(error.message))
+      if (isVerificationError) {
+        sessionStorage.setItem('pendingVerificationEmail', email)
+        setNeedsVerification(true)
+        setNotice('Your email has not been verified yet. Verify it to continue.')
+        return
+      }
       setNotice(error instanceof Error ? error.message : 'Sign-in failed. Please try again.')
     } finally {
       setIsSubmitting(false)
@@ -453,6 +479,11 @@ export function SuperAdminLoginPage() {
         <PasswordField />
         <button type="submit" disabled={isSubmitting} className="group mt-1 flex min-h-12 w-full items-center justify-center gap-2 bg-forest px-4 py-3 text-[10px] font-semibold tracking-[0.12em] text-white shadow-sm transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">{isSubmitting ? 'SIGNING IN…' : 'SIGN IN TO PLATFORM'} {!isSubmitting && <ArrowRight aria-hidden="true" className="size-3.5 transition-transform group-hover:translate-x-1" />}</button>
         {notice && <PreviewNotice message={notice} />}
+        {needsVerification && (
+          <div className="mt-3 text-center">
+            <Link to="/verify-email" className="inline-flex items-center justify-center gap-2 text-[10px] font-semibold text-forest underline-offset-2 hover:underline">Verify your email now <ArrowRight aria-hidden="true" className="size-3.5" /></Link>
+          </div>
+        )}
       </form>
       <div className="mt-5 border-t border-stone-100 pt-4 text-center">
         <p className="text-[10px] text-muted">Hotel administrator? <Link to="/hotel/login" className="font-semibold text-forest underline-offset-2 hover:underline">Go to hotel sign in</Link></p>

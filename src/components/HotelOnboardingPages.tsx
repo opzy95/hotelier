@@ -37,72 +37,104 @@ function Notice({ children, tone = 'error' }: { children: ReactNode; tone?: 'err
 
 export function EmailVerificationPage() {
   const [isVerifying, setIsVerifying] = useState(false)
+  const [isSendingCode, setIsSendingCode] = useState(false)
   const [isVerified, setIsVerified] = useState(false)
-  const [isResending, setIsResending] = useState(false)
   const [error, setError] = useState('')
-  const [email, setEmail] = useState('')
-  const [resendNotice, setResendNotice] = useState('')
-  const token = new URLSearchParams(window.location.search).get('token') ?? ''
+  const [notice, setNotice] = useState('')
+  const [email, setEmail] = useState(() => sessionStorage.getItem('pendingVerificationEmail') ?? '')
+  const [code, setCode] = useState('')
+  const [cooldownSeconds, setCooldownSeconds] = useState(0)
 
-  async function verifyEmail() {
-    if (!token || isVerifying) return
+  useEffect(() => {
+    if (!email) {
+      const storedEmail = sessionStorage.getItem('pendingVerificationEmail') ?? ''
+      if (storedEmail) setEmail(storedEmail)
+    }
+  }, [email])
+
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return
+
+    const timer = window.setTimeout(() => {
+      setCooldownSeconds((current) => Math.max(0, current - 1))
+    }, 1000)
+
+    return () => window.clearTimeout(timer)
+  }, [cooldownSeconds])
+
+  async function sendVerificationCode() {
+    const cleanEmail = email.trim()
+    if (!cleanEmail || isSendingCode || cooldownSeconds > 0) return
     setError('')
+    setNotice('')
+    setIsSendingCode(true)
+    try {
+      await apiRequest<{ message: string }>('/auth/send-verification-code', {
+        method: 'POST',
+        body: JSON.stringify({ email: cleanEmail }),
+      })
+      setNotice('A 6-digit verification code has been sent to your email.')
+      setCooldownSeconds(60)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not send the verification code. Please try again.')
+    } finally {
+      setIsSendingCode(false)
+    }
+  }
+
+  async function verifyEmailCode() {
+    const cleanEmail = email.trim()
+    const cleanCode = code.trim()
+    if (!cleanEmail || cleanCode.length !== 6 || isVerifying) return
+    setError('')
+    setNotice('')
     setIsVerifying(true)
     try {
-      await apiRequest<{ message: string }>('/auth/verify-email', {
+      await apiRequest<{ message: string }>('/auth/verify-code', {
         method: 'POST',
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ email: cleanEmail, code: cleanCode }),
       })
       setIsVerified(true)
+      sessionStorage.removeItem('pendingVerificationEmail')
+      setEmail('')
+      setCode('')
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Email verification failed. Please try again.')
+      setError(requestError instanceof Error ? requestError.message : 'The verification code is invalid or has expired. Please try again.')
     } finally {
       setIsVerifying(false)
     }
   }
 
-  async function resendVerificationEmail(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setError('')
-    setResendNotice('')
-    setIsResending(true)
-    try {
-      const result = await apiRequest<{ message: string }>('/auth/resend-verification', {
-        method: 'POST',
-        body: JSON.stringify({ email: email.trim() }),
-      })
-      setResendNotice(result.message)
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not resend the verification email.')
-    } finally {
-      setIsResending(false)
-    }
-  }
-
   return (
-    <OnboardingFrame eyebrow="EMAIL VERIFICATION" title={isVerified ? 'Email verified' : 'Verify your email'} description={isVerified ? 'Your account is ready. Sign in to choose a plan and finish setting up your hotel.' : 'Verify the email address you used to register your hotel account.'}>
+    <OnboardingFrame eyebrow="EMAIL VERIFICATION" title={isVerified ? 'Email verified' : 'Verify your email'} description={isVerified ? 'Your account is ready. Sign in to choose a plan and finish setting up your hotel.' : 'Enter your registration email and the 6-digit code we send to it to continue.'}>
       {isVerified ? (
         <Notice tone="success">Your email is verified. Sign in to continue to plan selection and hotel setup.</Notice>
-      ) : token ? (
-        <>
-          <button type="button" onClick={() => { void verifyEmail() }} disabled={isVerifying} className="mt-2 inline-flex min-h-11 items-center gap-2 bg-forest px-5 text-xs font-semibold tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">
-            {isVerifying ? 'VERIFYING…' : 'VERIFY EMAIL'} {isVerifying ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <Check aria-hidden="true" className="size-4" />}
-          </button>
-          {error && <Notice>{error}</Notice>}
-        </>
       ) : (
-        <Notice>The verification link is missing its token. Enter your registration email to request a new link.</Notice>
-      )}
-      {!isVerified && (error || !token) && (
-        <form onSubmit={(event) => { void resendVerificationEmail(event) }} className="mt-4">
+        <form className="mt-4 space-y-4" onSubmit={(event) => { event.preventDefault(); void verifyEmailCode() }}>
           <label className="block text-[10px] font-semibold tracking-wide">REGISTRATION EMAIL
             <input className="mt-1.5 w-full border border-stone-200 bg-white px-3 py-3 text-xs text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10" type="email" name="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} maxLength={254} required />
           </label>
-          <button type="submit" disabled={isResending} className="mt-3 min-h-10 border border-forest px-4 text-xs font-semibold text-forest transition-colors hover:bg-forest hover:text-white disabled:cursor-wait disabled:opacity-60">{isResending ? 'SENDING…' : 'RESEND VERIFICATION EMAIL'}</button>
-          {resendNotice && <Notice tone="success">{resendNotice}</Notice>}
-          {error && !token && <Notice>{error}</Notice>}
+
+          <div>
+            <label className="block text-[10px] font-semibold tracking-wide">VERIFICATION CODE
+              <input className="mt-1.5 w-full border border-stone-200 bg-white px-3 py-3 text-xs text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10" type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="123456" required />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <button type="button" onClick={() => { void sendVerificationCode() }} disabled={isSendingCode || cooldownSeconds > 0} className="min-h-10 border border-forest px-4 text-xs font-semibold text-forest transition-colors hover:bg-forest hover:text-white disabled:cursor-wait disabled:opacity-60">
+              {isSendingCode ? 'SENDING…' : cooldownSeconds > 0 ? `RESEND IN ${cooldownSeconds}s` : 'SEND CODE'}
+            </button>
+            <button type="submit" disabled={isVerifying || code.length !== 6} className="inline-flex min-h-11 items-center gap-2 bg-forest px-5 text-xs font-semibold tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">
+              {isVerifying ? 'VERIFYING…' : 'VERIFY CODE'} {isVerifying ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : <Check aria-hidden="true" className="size-4" />}
+            </button>
+          </div>
+
+          {notice && <Notice tone="success">{notice}</Notice>}
+          {error && <Notice>{error}</Notice>}
         </form>
       )}
+
       <p className="mt-5 text-xs text-muted">
         {isVerified ? 'Next step: ' : 'Already verified? '}
         <Link to="/hotel/login" className="font-semibold text-forest underline-offset-2 hover:underline">Sign in to your hotel account</Link>
