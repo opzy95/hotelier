@@ -9,7 +9,7 @@ import {
   reservationOutstandingAmount,
   reservationPaidAmount,
 } from './adminReservationsData'
-import { getOperationalRooms, getRoomStatusCounts } from './adminRoomsData'
+import { getRoomStatusCounts } from './adminRoomsData'
 import type { Reservation } from './adminReservationsData'
 
 type StayPeriod = 'All Stays' | 'This Month' | 'Next 30 Days' | 'Past Stays'
@@ -72,7 +72,7 @@ export function AdminReports() {
     !query || `${reservation.reference} ${reservation.guest} ${reservation.room} ${reservation.assignedRoomId ?? ''}`.toLowerCase().includes(query)
   )), [periodReservations, query])
 
-  const operationalRooms = useMemo(() => getOperationalRooms(rooms, reservations), [reservations, rooms])
+  const operationalRooms = rooms.filter((room) => room.active)
   const roomCounts = getRoomStatusCounts(operationalRooms)
   const currentlyStaying = reservations.filter((reservation) => reservation.folio === 'Checked In').length
   const upcoming = periodReservations.filter((reservation) => (
@@ -84,8 +84,6 @@ export function AdminReports() {
     { label: 'Available', count: roomCounts.Available, color: 'bg-emerald-600', text: 'text-emerald-800' },
     { label: 'Occupied', count: roomCounts.Occupied, color: 'bg-sky-700', text: 'text-sky-800' },
     { label: 'Reserved', count: roomCounts.Reserved, color: 'bg-amber-700', text: 'text-amber-900' },
-    { label: 'Cleaning', count: roomCounts.Cleaning, color: 'bg-cyan-600', text: 'text-cyan-800' },
-    { label: 'Maintenance', count: roomCounts.Maintenance, color: 'bg-rose-700', text: 'text-rose-800' },
   ]
   const totalRooms = operationalRooms.length
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
+  Archive,
   BedDouble,
   Check,
   ChevronDown,
@@ -15,66 +16,57 @@ import {
   Plus,
   Search,
   Save,
-  ShieldCheck,
   SlidersHorizontal,
-  Sparkles,
   UsersRound,
   Waves,
   X,
 } from 'lucide-react'
-import { roomSuites } from '../data/roomSuites'
 import { useAdminReservations } from './AdminReservationsContext'
-import {
-  formatReservationDate,
-  reservationBalanceDue,
-  reservationCurrency,
-  reservationPaidAmount,
-} from './adminReservationsData'
-import type { Reservation } from './adminReservationsData'
-import { getOperationalRooms, getRoomReservation, getRoomStatusCounts } from './adminRoomsData'
-import type { Room, RoomStatus } from './adminRoomsData'
+import { createRoom, createRoomType, deactivateRoom, deactivateRoomType, deleteRoomTypePhoto, fetchRoomInventory, updateRoom, updateRoomType, uploadRoomTypePhotos } from './adminRoomsApi'
+import { getRoomStatusCounts } from './adminRoomsData'
+import type { BedSetupItem, Room, RoomDraft, RoomStatus, RoomType, RoomTypeDraft } from './adminRoomsData'
 
 const statusDetails: Record<RoomStatus, { color: string; accent: string }> = {
   Available: { color: 'border-emerald-200 bg-emerald-50 text-emerald-800', accent: 'bg-emerald-600' },
   Occupied: { color: 'border-sky-200 bg-sky-50 text-sky-800', accent: 'bg-sky-700' },
   Reserved: { color: 'border-amber-200 bg-amber-50 text-amber-900', accent: 'bg-amber-700' },
-  Cleaning: { color: 'border-cyan-200 bg-cyan-50 text-cyan-800', accent: 'bg-cyan-700' },
-  Maintenance: { color: 'border-rose-200 bg-rose-50 text-rose-800', accent: 'bg-rose-700' },
 }
 
-const currency = new Intl.NumberFormat('en-NG', { maximumFractionDigits: 0 })
 const pageSize = 8
+
+function formatCurrency(amount: number, currencyCode: string) {
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyCode, maximumFractionDigits: 2 }).format(amount)
+  } catch {
+    return `${currencyCode} ${amount.toFixed(2)}`
+  }
+}
+
+function formatBedSetup(beds: BedSetupItem[]) {
+  return beds.map(({ type, count }) => `${count} ${type} ${count === 1 ? 'bed' : 'beds'}`).join(', ')
+}
 
 function RoomStatusBadge({ status }: { status: RoomStatus }) {
   return (
     <span className={`inline-flex items-center gap-1.5 border px-2 py-1 text-[10px] font-semibold ${statusDetails[status].color}`}>
       <i className={`size-1.5 rounded-full ${statusDetails[status].accent}`} />
-      {status === 'Cleaning' ? 'Cleaning (Turnaround)' : status}
+      {status}
     </span>
   )
 }
 
-function RoomDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (room: Room) => void }) {
-  const [name, setName] = useState('')
-  const [type, setType] = useState(roomSuites[0].fullName)
+function RoomDialog({ roomTypes, onClose, onSave, saving, error }: {
+  roomTypes: RoomType[]
+  onClose: () => void
+  onSave: (draft: RoomDraft) => void
+  saving: boolean
+  error: string
+}) {
+  const [number, setNumber] = useState('')
+  const [roomTypeId, setRoomTypeId] = useState(roomTypes[0]?.id ?? '')
   const [floor, setFloor] = useState('1')
-
-  function submitRoom(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const suite = roomSuites.find((item) => item.fullName === type) ?? roomSuites[0]
-    onAdd({
-      id: `N${String(Date.now()).slice(-4)}`,
-      name: name.trim(),
-      type: suite.fullName,
-      floor: Number(floor),
-      area: Number(suite.details[0].label.replace(' sqm', '')),
-      rate: suite.priceValue,
-      guests: suite.maxGuests,
-      status: 'Available',
-      image: suite.image,
-      amenities: suite.amenities.slice(0, 2).map((amenity) => amenity.label),
-    })
-  }
+  const [wing, setWing] = useState('')
+  const [notes, setNotes] = useState('')
 
   const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-[13px] text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
 
@@ -97,28 +89,28 @@ function RoomDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (room: Roo
             <X aria-hidden="true" className="size-4" />
           </button>
         </header>
-        <form onSubmit={submitRoom} className="flex flex-1 flex-col">
+        <form onSubmit={(event) => { event.preventDefault(); onSave({ roomNumber: number.trim(), roomTypeId, floor: Number(floor), wing: wing.trim(), notes: notes.trim() }) }} className="flex flex-1 flex-col">
           <div className="flex-1 space-y-4 p-5">
+            {error && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-900">{error}</p>}
             <label className="block text-[11px] font-semibold tracking-wide text-ink">
-              ROOM NAME
-              <input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Room 501" required />
+              ROOM NUMBER OR CODE *
+              <input className={fieldClass} value={number} onChange={(event) => setNumber(event.target.value)} placeholder="e.g. 501" required />
             </label>
             <label className="block text-[11px] font-semibold tracking-wide text-ink">
-              ROOM TYPE
-              <select className={fieldClass} value={type} onChange={(event) => setType(event.target.value)}>
-                {roomSuites.map((suite) => <option key={suite.id} value={suite.fullName}>{suite.fullName}</option>)}
+              ROOM TYPE *
+              <select className={fieldClass} value={roomTypeId} onChange={(event) => setRoomTypeId(event.target.value)} required>
+                {roomTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
               </select>
             </label>
-            <label className="block text-[11px] font-semibold tracking-wide text-ink">
-              FLOOR
-              <select className={fieldClass} value={floor} onChange={(event) => setFloor(event.target.value)}>
-                {[1, 2, 3, 4, 5, 6].map((value) => <option key={value} value={value}>Floor {value}</option>)}
-              </select>
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-[11px] font-semibold tracking-wide text-ink">FLOOR<input className={fieldClass} type="number" min="1" value={floor} onChange={(event) => setFloor(event.target.value)} /></label>
+              <label className="block text-[11px] font-semibold tracking-wide text-ink">WING / BUILDING<input className={fieldClass} value={wing} onChange={(event) => setWing(event.target.value)} placeholder="Optional" /></label>
+            </div>
+            <label className="block text-[11px] font-semibold tracking-wide text-ink">ROOM NOTES<textarea className={`${fieldClass} min-h-20 resize-y`} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Optional room-specific details" /></label>
           </div>
           <footer className="flex justify-end gap-2 border-t border-stone-200 bg-white p-4">
             <button type="button" onClick={onClose} className="border border-stone-300 px-4 py-2.5 text-[11px] font-semibold text-ink hover:bg-stone-50">Cancel</button>
-            <button type="submit" className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[11px] font-semibold text-white hover:bg-forest-deep"><Plus aria-hidden="true" className="size-3.5" /> Add Room</button>
+            <button type="submit" disabled={saving || !roomTypes.length} className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[11px] font-semibold text-white hover:bg-forest-deep disabled:opacity-50"><Plus aria-hidden="true" className="size-3.5" /> {saving ? 'Saving…' : 'Add Room'}</button>
           </footer>
         </form>
       </section>
@@ -126,34 +118,24 @@ function RoomDialog({ onClose, onAdd }: { onClose: () => void; onAdd: (room: Roo
   )
 }
 
-function RoomEditDialog({ room, onClose, onSave }: {
+function RoomEditDialog({ room, roomTypes, onClose, onSave, saving, error }: {
   room: Room
+  roomTypes: RoomType[]
   onClose: () => void
-  onSave: (room: Room) => void
+  onSave: (draft: RoomDraft) => void
+  saving: boolean
+  error: string
 }) {
   const [name, setName] = useState(room.name)
-  const [type, setType] = useState(room.type)
+  const [roomTypeId, setRoomTypeId] = useState(room.roomTypeId ?? roomTypes.find((type) => type.name === room.type)?.id ?? '')
   const [floor, setFloor] = useState(String(room.floor))
-  const [area, setArea] = useState(String(room.area))
-  const [rate, setRate] = useState(String(room.rate))
-  const [guests, setGuests] = useState(String(room.guests))
-  const [amenities, setAmenities] = useState(room.amenities.join(', '))
+  const [wing, setWing] = useState(room.wing ?? '')
+  const [notes, setNotes] = useState(room.notes ?? '')
   const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-[13px] text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
 
   function submitChanges(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const suiteImage = roomSuites.find((suite) => suite.fullName === type)?.image
-    onSave({
-      ...room,
-      name: name.trim(),
-      type: type.trim(),
-      floor: Number(floor),
-      area: Number(area),
-      rate: Number(rate),
-      guests: Number(guests),
-      amenities: amenities.split(',').map((amenity) => amenity.trim()).filter(Boolean),
-      image: suiteImage ?? room.image,
-    })
+    onSave({ roomNumber: name.trim(), roomTypeId, floor: Number(floor), wing: wing.trim(), notes: notes.trim() })
   }
 
   return (
@@ -177,44 +159,21 @@ function RoomEditDialog({ room, onClose, onSave }: {
         </header>
         <form onSubmit={submitChanges} className="flex min-h-0 flex-1 flex-col">
           <div className="flex-1 space-y-4 overflow-y-auto p-5">
+            {error && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-900">{error}</p>}
             <label className="block text-[11px] font-semibold tracking-wide text-ink">
               ROOM NAME
               <input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} required />
             </label>
-            <label className="block text-[11px] font-semibold tracking-wide text-ink">
-              ROOM TYPE
-              <select className={fieldClass} value={type} onChange={(event) => setType(event.target.value)} required>
-                {!roomSuites.some((suite) => suite.fullName === type) && <option value={type}>{type}</option>}
-                {roomSuites.map((suite) => <option key={suite.id} value={suite.fullName}>{suite.fullName}</option>)}
-              </select>
-            </label>
+            <label className="block text-[11px] font-semibold tracking-wide text-ink">ROOM TYPE<select className={fieldClass} value={roomTypeId} onChange={(event) => setRoomTypeId(event.target.value)} required>{roomTypes.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select></label>
             <div className="grid grid-cols-2 gap-3">
-              <label className="block text-[11px] font-semibold tracking-wide text-ink">
-                FLOOR
-                <input className={fieldClass} type="number" min="1" max="99" value={floor} onChange={(event) => setFloor(event.target.value)} required />
-              </label>
-              <label className="block text-[11px] font-semibold tracking-wide text-ink">
-                AREA (SQM)
-                <input className={fieldClass} type="number" min="1" value={area} onChange={(event) => setArea(event.target.value)} required />
-              </label>
-              <label className="block text-[11px] font-semibold tracking-wide text-ink">
-                NIGHTLY RATE (₦)
-                <input className={fieldClass} type="number" min="0" step="1000" value={rate} onChange={(event) => setRate(event.target.value)} required />
-              </label>
-              <label className="block text-[11px] font-semibold tracking-wide text-ink">
-                MAX GUESTS
-                <input className={fieldClass} type="number" min="1" value={guests} onChange={(event) => setGuests(event.target.value)} required />
-              </label>
+              <label className="block text-[11px] font-semibold tracking-wide text-ink">FLOOR<input className={fieldClass} type="number" min="1" max="99" value={floor} onChange={(event) => setFloor(event.target.value)} /></label>
+              <label className="block text-[11px] font-semibold tracking-wide text-ink">WING / BUILDING<input className={fieldClass} value={wing} onChange={(event) => setWing(event.target.value)} /></label>
             </div>
-            <label className="block text-[11px] font-semibold tracking-wide text-ink">
-              AMENITIES
-              <textarea className={`${fieldClass} min-h-24 resize-y`} value={amenities} onChange={(event) => setAmenities(event.target.value)} placeholder="Separate amenities with commas" />
-              <span className="mt-1 block text-[10px] font-normal normal-case tracking-normal text-muted">Separate each amenity with a comma.</span>
-            </label>
+            <label className="block text-[11px] font-semibold tracking-wide text-ink">ROOM NOTES<textarea className={`${fieldClass} min-h-24 resize-y`} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
           </div>
           <footer className="flex justify-end gap-2 border-t border-stone-200 bg-white p-4">
             <button type="button" onClick={onClose} className="border border-stone-300 px-4 py-2.5 text-[11px] font-semibold text-ink hover:bg-stone-50">Cancel</button>
-            <button type="submit" className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[11px] font-semibold text-white hover:bg-forest-deep"><Save aria-hidden="true" className="size-3.5" /> Save Changes</button>
+            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[11px] font-semibold text-white hover:bg-forest-deep disabled:opacity-50"><Save aria-hidden="true" className="size-3.5" /> {saving ? 'Saving…' : 'Save Changes'}</button>
           </footer>
         </form>
       </section>
@@ -222,88 +181,146 @@ function RoomEditDialog({ room, onClose, onSave }: {
   )
 }
 
-function RoomInspector({ room, reservation, onClose, onStatusChange, onEdit }: {
-  room: Room
-  reservation?: Reservation
+function RoomTypeForm({ roomType, onCancel, onSave, onDeletePhoto, saving }: {
+  roomType?: RoomType
+  onCancel: () => void
+  onSave: (draft: RoomTypeDraft, roomTypeId?: string, photos?: File[]) => Promise<boolean>
+  onDeletePhoto: (roomTypeId: string, photoId: string) => void
+  saving: boolean
+}) {
+  const [name, setName] = useState(roomType?.name ?? '')
+  const [description, setDescription] = useState(roomType?.description ?? '')
+  const [area, setArea] = useState(String(roomType?.area ?? ''))
+  const [maxGuests, setMaxGuests] = useState(String(roomType?.maxGuests ?? ''))
+  const [bedSetup, setBedSetup] = useState<BedSetupItem[]>(roomType?.bedSetup.length ? roomType.bedSetup : [{ type: '', count: 1 }])
+  const [rate, setRate] = useState(String(roomType?.rate ?? ''))
+  const [amenities, setAmenities] = useState(roomType?.amenities.join(', ') ?? '')
+  const [photos, setPhotos] = useState<File[]>([])
+  const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-xs text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = event.currentTarget
+    const saved = await onSave({
+      name: name.trim(),
+      description: description.trim(),
+      area: Number(area),
+      maxGuests: Number(maxGuests),
+      bedSetup: bedSetup.filter((bed) => bed.type.trim()).map((bed) => ({ type: bed.type.trim(), count: bed.count })),
+      rate: Number(rate),
+      amenities: amenities.split(',').map((amenity) => amenity.trim()).filter(Boolean),
+    }, roomType?.id, photos)
+    if (saved && !roomType) {
+      form.reset()
+      setName('')
+      setDescription('')
+      setArea('')
+      setMaxGuests('')
+      setBedSetup([{ type: '', count: 1 }])
+      setRate('')
+      setAmenities('')
+      setPhotos([])
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-3">
+      <label className="block text-[10px] font-semibold tracking-wide text-ink">ROOM TYPE NAME *<input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Deluxe Lagoon Room" required /></label>
+      <label className="block text-[10px] font-semibold tracking-wide text-ink">DESCRIPTION<textarea className={`${fieldClass} min-h-16 resize-y`} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Describe this room category" /></label>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block text-[10px] font-semibold tracking-wide text-ink">SIZE (SQM) *<input className={fieldClass} type="number" min="1" step="0.1" value={area} onChange={(event) => setArea(event.target.value)} required /></label>
+        <label className="block text-[10px] font-semibold tracking-wide text-ink">MAX GUESTS *<input className={fieldClass} type="number" min="1" step="1" value={maxGuests} onChange={(event) => setMaxGuests(event.target.value)} required /></label>
+        <label className="block text-[10px] font-semibold tracking-wide text-ink">BASE RATE / NIGHT *<input className={fieldClass} type="number" min="0" step="0.01" value={rate} onChange={(event) => setRate(event.target.value)} required /><span className="mt-1 block text-[9px] font-normal normal-case tracking-normal text-muted">Entered in the hotel’s configured currency.</span></label>
+      </div>
+      <fieldset className="space-y-2"><legend className="text-[10px] font-semibold tracking-wide text-ink">BED SETUP *</legend>{bedSetup.map((bed, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_88px_32px] gap-2"><label className="sr-only" htmlFor={`bed-type-${index}`}>Bed type</label><input id={`bed-type-${index}`} className={fieldClass} value={bed.type} onChange={(event) => setBedSetup((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, type: event.target.value } : item))} placeholder="e.g. queen" required /><label className="sr-only" htmlFor={`bed-count-${index}`}>Bed count</label><input id={`bed-count-${index}`} className={fieldClass} type="number" min="1" step="1" value={bed.count} onChange={(event) => setBedSetup((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, count: Number(event.target.value) } : item))} required /><button type="button" disabled={bedSetup.length === 1} onClick={() => setBedSetup((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`Remove bed setup ${index + 1}`} className="grid size-8 place-items-center border border-stone-200 text-muted hover:text-rose-800 disabled:opacity-40"><X aria-hidden="true" className="size-3.5" /></button></div>)}<button type="button" onClick={() => setBedSetup((current) => [...current, { type: '', count: 1 }])} className="inline-flex items-center gap-1 text-[10px] font-semibold text-forest hover:underline"><Plus aria-hidden="true" className="size-3" />Add bed type</button></fieldset>
+      <label className="block text-[10px] font-semibold tracking-wide text-ink">AMENITIES<textarea className={`${fieldClass} min-h-16 resize-y`} value={amenities} onChange={(event) => setAmenities(event.target.value)} placeholder="Wi-Fi, balcony, breakfast" /><span className="mt-1 block text-[9px] font-normal normal-case tracking-normal text-muted">Separate amenities with commas.</span></label>
+      {roomType?.photos.length ? <div><p className="mb-1.5 text-[10px] font-semibold tracking-wide text-ink">ROOM TYPE PHOTOS</p><div className="grid grid-cols-3 gap-2">{roomType.photos.map((photo) => <div key={photo.id} className="relative aspect-[4/3] overflow-hidden border border-stone-200"><img src={photo.url} alt={`${roomType.name} room`} className="size-full object-cover" /><button type="button" onClick={() => onDeletePhoto(roomType.id, photo.id)} disabled={saving} aria-label="Remove photo" className="absolute right-1 top-1 grid size-6 place-items-center bg-white/90 text-rose-800 shadow-sm disabled:opacity-50"><X aria-hidden="true" className="size-3" /></button></div>)}</div></div> : null}
+      <label className="block text-[10px] font-semibold tracking-wide text-ink">{roomType ? 'ADD PHOTOS' : 'PHOTOS'}<input className={`${fieldClass} file:mr-3 file:border-0 file:bg-forest file:px-3 file:py-2 file:text-[10px] file:font-semibold file:text-white`} type="file" accept="image/*" multiple onChange={(event) => setPhotos(Array.from(event.target.files ?? []))} /><span className="mt-1 block text-[9px] font-normal normal-case tracking-normal text-muted">Images upload after this room type is saved.</span></label>
+      <div className="flex justify-end gap-2 border-t border-stone-200 pt-3">
+        <button type="button" onClick={onCancel} className="border border-stone-300 px-3 py-2 text-[10px] font-semibold text-ink hover:bg-stone-50">Cancel</button>
+        <button type="submit" disabled={saving} className="inline-flex items-center gap-2 bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:opacity-50"><Save aria-hidden="true" className="size-3.5" />{saving ? 'Saving…' : roomType ? 'Save Type' : 'Add Type'}</button>
+      </div>
+    </form>
+  )
+}
+
+function RoomTypeManagerDialog({ roomTypes, onClose, onSave, onDeactivate, onDeletePhoto, saving, error }: {
+  roomTypes: RoomType[]
   onClose: () => void
-  onStatusChange: (status: RoomStatus) => void
+  onSave: (draft: RoomTypeDraft, roomTypeId?: string, photos?: File[]) => Promise<boolean>
+  onDeactivate: (roomTypeId: string) => void
+  onDeletePhoto: (roomTypeId: string, photoId: string) => void
+  saving: boolean
+  error: string
+}) {
+  const [editing, setEditing] = useState<RoomType | null>(null)
+  const [adding, setAdding] = useState(false)
+
+  return (
+    <div className="fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-black/50 p-4" onMouseDown={onClose}>
+      <section role="dialog" aria-modal="true" aria-labelledby="room-types-title" className="my-auto w-full max-w-3xl border border-stone-200 bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="flex items-start justify-between border-b border-stone-200 px-5 py-4">
+          <div><p className="text-[10px] font-semibold tracking-[0.15em] text-amber-800">ROOM CONFIGURATION</p><h2 id="room-types-title" className="mt-1 font-display text-xl text-ink">Manage Room Types</h2><p className="mt-1 text-[11px] text-muted">Configure shared capacity, beds, amenities, and nightly pricing before adding rooms.</p></div>
+          <button type="button" onClick={onClose} aria-label="Close room types" className="grid size-8 place-items-center text-muted hover:bg-stone-100"><X aria-hidden="true" className="size-4" /></button>
+        </header>
+        {error && <p role="alert" className="mx-5 mt-4 border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-900">{error}</p>}
+        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1.3fr)_minmax(260px,.8fr)]">
+          <section>
+            <div className="mb-2 flex items-center justify-between"><h3 className="text-[10px] font-semibold tracking-wide text-ink">SAVED ROOM TYPES</h3><span className="text-[10px] text-muted">{roomTypes.filter((type) => type.active).length} active</span></div>
+            <div className="divide-y divide-stone-200 border-y border-stone-200">
+              {roomTypes.length ? roomTypes.map((type) => (
+                <article key={type.id} className={`flex items-start justify-between gap-3 py-3 ${!type.active ? 'opacity-55' : ''}`}>
+                  <div className="min-w-0"><div className="flex items-center gap-2"><strong className="truncate text-xs font-semibold text-ink">{type.name}</strong><span className="text-[8px] font-semibold tracking-wide text-muted">{type.active ? 'ACTIVE' : 'INACTIVE'}</span></div><p className="mt-1 text-[10px] text-muted">{type.area} sqm · Max {type.maxGuests} guests · {formatBedSetup(type.bedSetup)}</p><p className="mt-1 text-[10px] font-semibold text-amber-900">{formatCurrency(type.rate, type.currency)} / night</p></div>
+                  <div className="flex shrink-0 gap-1"><button type="button" onClick={() => { setEditing(type); setAdding(false) }} aria-label={`Edit ${type.name}`} className="grid size-8 place-items-center border border-stone-200 text-muted hover:text-ink"><Pencil aria-hidden="true" className="size-3.5" /></button>{type.active && <button type="button" onClick={() => { if (window.confirm(`Deactivate ${type.name}? Existing rooms will keep this type.`)) onDeactivate(type.id) }} disabled={saving} aria-label={`Deactivate ${type.name}`} title="Deactivate room type" className="grid size-8 place-items-center border border-stone-200 text-muted hover:text-rose-800 disabled:opacity-50"><Archive aria-hidden="true" className="size-3.5" /></button>}</div>
+                </article>
+              )) : <p className="py-8 text-center text-[11px] text-muted">No room types yet. Add one to start building your inventory.</p>}
+            </div>
+          </section>
+          <section className="border border-stone-200 bg-paper p-4">
+            {editing || adding ? <><div className="mb-3 flex items-center justify-between"><h3 className="text-[10px] font-semibold tracking-wide text-ink">{editing ? 'EDIT ROOM TYPE' : 'NEW ROOM TYPE'}</h3><button type="button" onClick={() => { setEditing(null); setAdding(false) }} aria-label="Close room type form" className="grid size-7 place-items-center text-muted hover:bg-stone-100"><X aria-hidden="true" className="size-3.5" /></button></div><RoomTypeForm key={editing?.id ?? 'new'} roomType={editing ? roomTypes.find((type) => type.id === editing.id) ?? editing : undefined} onCancel={() => { setEditing(null); setAdding(false) }} onSave={onSave} onDeletePhoto={onDeletePhoto} saving={saving} /></> : <div className="flex h-full min-h-40 flex-col items-start justify-center"><h3 className="font-display text-lg text-ink">Build your room catalog</h3><p className="mt-1 text-[10px] leading-5 text-muted">Each type stores shared features and pricing. Individual rooms reference one saved type.</p><button type="button" onClick={() => setAdding(true)} className="mt-4 inline-flex min-h-9 items-center gap-2 bg-forest px-3 text-[10px] font-semibold text-white hover:bg-forest-deep"><Plus aria-hidden="true" className="size-3.5" />Add Room Type</button></div>}
+          </section>
+        </div>
+        <footer className="flex justify-end border-t border-stone-200 px-5 py-3"><button type="button" onClick={onClose} className="bg-forest px-4 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep">Done</button></footer>
+      </section>
+    </div>
+  )
+}
+
+function RoomInspector({ room, onClose, onEdit, onDeactivate, saving }: {
+  room: Room
+  onClose: () => void
   onEdit: () => void
+  onDeactivate: () => void
+  saving: boolean
 }) {
   return (
     <aside className="self-start border border-stone-200 bg-white shadow-sm">
       <div className="flex items-center justify-between bg-forest px-3 py-2 text-white">
         <span className="text-[10px] font-semibold tracking-wide">INSPECTOR DRAWER</span>
         <div className="flex items-center gap-2 text-[10px] text-white/70">
-          Wing B · Floor {room.floor}
+          {room.wing ? `${room.wing} · ` : ''}Floor {room.floor}
           <button type="button" onClick={onClose} aria-label="Close room details" className="text-white/70 hover:text-white"><X aria-hidden="true" className="size-3.5" /></button>
         </div>
       </div>
       <div className="space-y-4 p-3">
         <div className="border-b border-stone-100 pb-3">
-          <h2 className="font-display text-xl leading-none text-ink">{room.name.replace('Room ', 'Room #')}</h2>
+          <h2 className="font-display text-xl leading-none text-ink">Room {room.name.replace(/^Room\s*/i, '')}</h2>
           <p className="mt-1 text-[10px] text-muted">{room.type} · {room.area} sqm</p>
         </div>
-        <section>
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="text-[10px] font-semibold tracking-wide text-ink">LIVE STATUS SWITCHER</h3>
-            <span className="text-[9px] text-amber-800">{room.status === 'Occupied' ? 'Active in-house' : 'Update room status'}</span>
-          </div>
-          {reservation ? (
-            <p className="border border-stone-200 bg-stone-50 px-3 py-2.5 text-[9px] leading-4 text-muted">
-              Status follows folio {reservation.reference}. Use the front desk check-in or check-out action to update this room.
-            </p>
-          ) : (
-            <div className="grid grid-cols-3 gap-1 rounded-sm border border-stone-200 bg-stone-50 p-1">
-              {(['Available', 'Cleaning', 'Maintenance'] as RoomStatus[]).map((status) => (
-                <button
-                  type="button"
-                  key={status}
-                  aria-pressed={room.status === status}
-                  onClick={() => onStatusChange(status)}
-                  className={`px-1 py-2 text-[9px] transition-colors ${room.status === status ? 'bg-forest text-white' : 'text-muted hover:bg-white hover:text-ink'}`}
-                >
-                  {status}
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-        {room.status === 'Occupied' && reservation?.folio === 'Checked In' && (
-          <section className="border border-amber-200 bg-amber-50/70 p-3">
-            <h3 className="flex items-center gap-1.5 text-[10px] font-semibold text-amber-950"><ShieldCheck aria-hidden="true" className="size-3.5" /> PMS Security Lockout Active</h3>
-            <p className="mt-1.5 text-[9px] leading-4 text-amber-950/75">Active guest reservation in-house. Room cannot be manually marked Available without a formal checkout.</p>
-          </section>
-        )}
-        {(room.status === 'Occupied' || room.status === 'Reserved') && (
-          <section className="bg-paper p-3">
-            <h3 className="text-[10px] font-semibold tracking-wide text-ink">STAY FOLIO BREAKDOWN</h3>
-            <div className="mt-2 grid grid-cols-2 gap-3 text-[9px]">
-              <span className="text-muted">Check-in<strong className="mt-1 block font-medium text-ink">{reservation ? `${formatReservationDate(reservation.checkIn)} ${reservation.checkIn.slice(0, 4)}` : 'Not recorded'}</strong></span>
-              <span className="text-muted">Scheduled Check-out<strong className="mt-1 block font-medium text-ink">{reservation ? `${formatReservationDate(reservation.checkOut)} ${reservation.checkOut.slice(0, 4)}` : 'Not recorded'}</strong></span>
-              <span className="text-muted">Booking reference<strong className="mt-1 block font-medium text-ink">{reservation?.reference ?? 'Not linked'}</strong></span>
-              <span className="text-muted">Total Room Folio<strong className="mt-1 block font-medium text-amber-900">{reservation ? reservationCurrency.format(reservation.amount) : `₦${currency.format(room.rate * 4)}.00`}</strong></span>
-            </div>
-            {reservation && (
-              <div className="mt-2 grid grid-cols-2 gap-3 border-t border-stone-200 pt-2 text-[9px]">
-                <span className="text-muted">Amount paid<strong className="mt-1 block font-medium text-emerald-800">{reservationCurrency.format(reservationPaidAmount(reservation))}</strong></span>
-                <span className="text-muted">Remaining balance<strong className="mt-1 block font-bold text-amber-950">{reservationCurrency.format(reservationBalanceDue(reservation))}</strong></span>
-              </div>
-            )}
-            {room.guest && <p className="mt-2 border-t border-stone-200 pt-2 text-[9px] text-muted">Current guest <strong className="font-medium text-ink">{room.guest}</strong></p>}
-          </section>
-        )}
+        <section className="border border-stone-200 bg-stone-50 px-3 py-2.5"><h3 className="text-[10px] font-semibold tracking-wide text-ink">ROOM STATUS</h3><p className="mt-1 text-[9px] leading-4 text-muted">{room.status} · Updated from reservations and check-in records.</p>{!room.active && <p className="mt-1 text-[9px] font-semibold text-rose-800">Inactive</p>}{room.guest && <p className="mt-1 text-[9px] text-muted">Guest: <strong className="font-medium text-ink">{room.guest}</strong></p>}</section>
         <section>
           <h3 className="mb-2 text-[10px] font-semibold tracking-wide text-ink">VERIFIED AMENITIES IN ROOM</h3>
           <div className="flex flex-wrap gap-1.5">
-            {[...room.amenities, 'Freestanding Soaking Tub'].map((amenity) => (
+            {room.amenities.map((amenity) => (
               <span key={amenity} className="inline-flex items-center gap-1 bg-stone-100 px-2 py-1 text-[9px] text-stone-700"><Check aria-hidden="true" className="size-2.5 text-amber-800" />{amenity}</span>
             ))}
           </div>
         </section>
         <div className="grid grid-cols-2 gap-2">
           <button type="button" onClick={onEdit} className="col-span-2 inline-flex items-center justify-center gap-2 bg-forest px-3 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep"><Pencil aria-hidden="true" className="size-3" /> Edit Room Specifications</button>
-          <button type="button" className="border border-stone-300 px-2 py-2 text-[9px] text-ink hover:bg-stone-50"><ClipboardList aria-hidden="true" className="mr-1 inline size-3" />Folio #{room.id}</button>
-          <button type="button" onClick={onClose} className="border border-stone-300 px-2 py-2 text-[9px] text-ink hover:bg-stone-50">Close Panel</button>
+          {room.notes && <p className="col-span-2 text-[9px] text-muted">{room.notes}</p>}
+          {room.active && <button type="button" onClick={onDeactivate} disabled={saving} className="col-span-2 inline-flex items-center justify-center gap-2 border border-rose-200 px-3 py-2 text-[10px] font-semibold text-rose-800 hover:bg-rose-50 disabled:opacity-50"><Archive aria-hidden="true" className="size-3" /> Deactivate Room</button>}
+          <button type="button" onClick={onClose} className="col-span-2 border border-stone-300 px-2 py-2 text-[9px] text-ink hover:bg-stone-50">Close Panel</button>
         </div>
       </div>
     </aside>
@@ -315,9 +332,10 @@ function RoomCard({ room, selected, onSelect, onEdit }: { room: Room; selected: 
     <article className={`min-w-0 overflow-hidden border bg-white shadow-sm transition-shadow hover:shadow-md ${selected ? 'border-amber-700 ring-1 ring-amber-700/20' : 'border-stone-200'}`}>
       <button type="button" onClick={onSelect} className="block w-full text-left" aria-label={`View details for ${room.name}`}>
         <div className="relative h-32 overflow-hidden bg-stone-100 sm:h-36">
-          <img src={room.image} alt={`${room.type} interior`} className="size-full object-cover" />
+          {room.image ? <img src={room.image} alt={`${room.type} interior`} className="size-full object-cover" /> : <div className="grid size-full place-items-center text-stone-400"><BedDouble aria-hidden="true" className="size-8" /></div>}
           <span className="absolute left-2 top-2"><RoomStatusBadge status={room.status} /></span>
-          <span className="absolute bottom-2 right-2 bg-forest/90 px-2 py-1 text-[10px] font-semibold text-white">₦{currency.format(room.rate)} / Night</span>
+          {!room.active && <span className="absolute right-2 top-2 bg-rose-800 px-2 py-1 text-[9px] font-semibold text-white">INACTIVE</span>}
+          <span className="absolute bottom-2 right-2 bg-forest/90 px-2 py-1 text-[10px] font-semibold text-white">{formatCurrency(room.rate, room.currency)} / Night</span>
           {room.status === 'Occupied' && selected && <span className="absolute right-2 top-2 bg-amber-800 px-2 py-1 text-[9px] text-white">Active Inspector View</span>}
         </div>
         <div className="p-3">
@@ -345,7 +363,7 @@ function RoomCard({ room, selected, onSelect, onEdit }: { room: Room; selected: 
       </button>
       <footer className="flex items-center justify-between border-t border-stone-100 px-3 py-2">
         <button type="button" onClick={onSelect} className="text-[9px] font-medium text-ink hover:text-amber-800">
-          {room.status === 'Cleaning' ? 'Mark as Inspected' : room.status === 'Reserved' ? 'View Reservation' : room.status === 'Maintenance' ? 'View Maintenance Work Order' : room.status === 'Occupied' ? 'View Folio' : 'View Details'}
+          {room.status === 'Reserved' ? 'View Reservation' : room.status === 'Occupied' ? 'View Stay' : 'View Details'}
           <span aria-hidden="true" className="ml-1">›</span>
         </button>
         <button type="button" onClick={onEdit} aria-label={`Edit ${room.name}`} className="grid size-6 place-items-center text-muted hover:text-ink"><Pencil aria-hidden="true" className="size-3" /></button>
@@ -355,8 +373,11 @@ function RoomCard({ room, selected, onSelect, onEdit }: { room: Room; selected: 
 }
 
 export function AdminRooms() {
-  const { reservations, rooms: roomData, setRooms: setRoomData } = useAdminReservations()
-  const [selectedId, setSelectedId] = useState('402')
+  const { rooms: roomData, roomTypes, includeInactiveRooms, roomLoading: isLoading, roomError: loadError, refreshRoomInventory } = useAdminReservations()
+  const [selectedId, setSelectedId] = useState('')
+  const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
+  const [actionError, setActionError] = useState('')
+  const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
   const [roomType, setRoomType] = useState('All Room Types')
   const [statusFilter, setStatusFilter] = useState('All Statuses')
@@ -366,47 +387,129 @@ export function AdminRooms() {
   const [dialog, setDialog] = useState<'room' | 'types' | null>(null)
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null)
 
-  const operationalRooms = useMemo(() => getOperationalRooms(roomData, reservations), [reservations, roomData])
+  const operationalRooms = roomData
+  const activeRooms = roomData.filter((room) => room.active)
   const selectedRoom = operationalRooms.find((room) => room.id === selectedId)
-  const selectedReservation = getRoomReservation(selectedId, reservations)
   const editingRoom = roomData.find((room) => room.id === editingRoomId)
-  const counts = useMemo(() => getRoomStatusCounts(operationalRooms), [operationalRooms])
+  const counts = getRoomStatusCounts(activeRooms)
 
   const filteredRooms = useMemo(() => {
     const query = search.trim().toLowerCase()
     return operationalRooms.filter((room) => (
       (!query || `${room.name} ${room.type} ${room.id}`.toLowerCase().includes(query))
+      && (includeInactiveRooms || room.active)
       && (roomType === 'All Room Types' || room.type === roomType)
       && (statusFilter === 'All Statuses' || room.status === statusFilter)
       && (floorFilter === 'All Floors' || room.floor === Number(floorFilter))
     ))
-  }, [floorFilter, operationalRooms, roomType, search, statusFilter])
+  }, [floorFilter, includeInactiveRooms, operationalRooms, roomType, search, statusFilter])
 
   const totalPages = Math.max(1, Math.ceil(filteredRooms.length / pageSize))
   const currentPage = Math.min(page, totalPages)
   const visibleRooms = filteredRooms.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  const roomTypes = [...new Set(operationalRooms.map((room) => room.type))]
+  const roomTypeNames = [...new Set(operationalRooms.filter((room) => includeInactiveRooms || room.active).map((room) => room.type))]
+  const activeRoomTypes = roomTypes.filter((type) => type.active)
 
   function changeFilter(setter: (value: string) => void, value: string) {
     setter(value)
     setPage(1)
   }
 
-  function updateSelectedStatus(status: RoomStatus) {
-    if (!selectedRoom || selectedReservation) return
-    setRoomData((current) => current.map((room) => room.id === selectedRoom.id ? { ...room, status } : room))
+  async function addRoom(draft: RoomDraft) {
+    setSaving(true)
+    setActionError('')
+    try {
+      await createRoom(hotelId, draft)
+      setSelectedId('')
+      setPage(1)
+      setDialog(null)
+      refreshRoomInventory()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not add this room.')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  function addRoom(room: Room) {
-    setRoomData((current) => [room, ...current])
-    setSelectedId(room.id)
-    setPage(1)
-    setDialog(null)
+  async function saveRoomChanges(draft: RoomDraft) {
+    if (!editingRoomId) return
+    setSaving(true)
+    setActionError('')
+    try {
+      await updateRoom(hotelId, editingRoomId, draft)
+      setEditingRoomId(null)
+      refreshRoomInventory()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not update this room.')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  function saveRoomChanges(updatedRoom: Room) {
-    setRoomData((current) => current.map((room) => room.id === updatedRoom.id ? updatedRoom : room))
-    setEditingRoomId(null)
+  async function saveRoomType(draft: RoomTypeDraft, roomTypeId?: string, photos: File[] = []): Promise<boolean> {
+    setSaving(true)
+    setActionError('')
+    try {
+      let savedTypeId = roomTypeId
+      if (roomTypeId) await updateRoomType(hotelId, roomTypeId, draft)
+      else {
+        const createdType = await createRoomType(hotelId, draft)
+        savedTypeId = createdType?.id
+        if (photos.length && !savedTypeId) {
+          const inventory = await fetchRoomInventory(hotelId)
+          savedTypeId = inventory.roomTypes.find((type) => type.name.toLowerCase() === draft.name.toLowerCase())?.id
+        }
+      }
+      if (photos.length && savedTypeId) await uploadRoomTypePhotos(hotelId, savedTypeId, photos)
+      else if (photos.length) throw new Error('Room type saved, but its ID was not returned. Reload the type and add photos from its edit form.')
+      refreshRoomInventory()
+      return true
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not save this room type.')
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function archiveRoomType(roomTypeId: string) {
+    setSaving(true)
+    setActionError('')
+    try {
+      await deactivateRoomType(hotelId, roomTypeId)
+      refreshRoomInventory()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not deactivate this room type.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function removeRoomTypePhoto(roomTypeId: string, photoId: string) {
+    setSaving(true)
+    setActionError('')
+    try {
+      await deleteRoomTypePhoto(hotelId, roomTypeId, photoId)
+      refreshRoomInventory()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not remove this room photo.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function archiveRoom(roomId: string) {
+    setSaving(true)
+    setActionError('')
+    try {
+      await deactivateRoom(hotelId, roomId)
+      setSelectedId('')
+      refreshRoomInventory()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not deactivate this room.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   function editRoom(room: Room) {
@@ -422,21 +525,22 @@ export function AdminRooms() {
         <div>
           <p className="text-[10px] font-semibold tracking-[0.17em] text-amber-800">PROPERTY INVENTORY</p>
           <h1 className="mt-1 font-display text-2xl text-ink sm:text-3xl">Rooms Management</h1>
-          <p className="mt-1 max-w-2xl text-[11px] text-muted sm:text-[13px]">Manage live room inventory, room configurations, night pricing, luxury amenities, and operational turnarounds across Victoria Island wings.</p>
+          <p className="mt-1 max-w-2xl text-[11px] text-muted sm:text-[13px]">Configure room categories, then assign physical rooms and track their reservation-driven availability.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => setDialog('types')} className="inline-flex items-center justify-center gap-2 border border-stone-300 bg-white px-3 py-2.5 text-[10px] font-semibold text-ink hover:bg-stone-50"><SlidersHorizontal aria-hidden="true" className="size-3.5" /> Manage Room Types</button>
-          <button type="button" onClick={() => setDialog('room')} className="inline-flex items-center justify-center gap-2 bg-forest px-3 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep"><CirclePlus aria-hidden="true" className="size-3.5" /> Add New Room</button>
+          <button type="button" onClick={() => setDialog(activeRoomTypes.length ? 'room' : 'types')} disabled={isLoading} className="inline-flex items-center justify-center gap-2 bg-forest px-3 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:opacity-50"><CirclePlus aria-hidden="true" className="size-3.5" /> Add New Room</button>
         </div>
       </header>
 
-      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      {(loadError || actionError) && <div role="alert" className="mb-4 flex items-center justify-between gap-3 border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] text-rose-900"><span>{actionError || loadError}</span>{loadError && <button type="button" onClick={() => refreshRoomInventory()} className="shrink-0 font-semibold underline underline-offset-2">Retry</button>}</div>}
+
+      <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         {([
-          { label: 'TOTAL ROOMS', status: null, value: roomData.length, icon: BedDouble, note: 'Across 4 residential floors' },
+          { label: 'TOTAL ROOMS', status: null, value: activeRooms.length, icon: BedDouble, note: 'Active physical rooms' },
           { label: 'AVAILABLE', status: 'Available' as RoomStatus, value: counts.Available, icon: CircleCheck, note: 'Ready for immediate guest use' },
-          { label: 'OCCUPIED', status: 'Occupied' as RoomStatus, value: counts.Occupied, icon: UsersRound, note: 'Active in-house VIP guests' },
-          { label: 'RESERVED', status: 'Reserved' as RoomStatus, value: counts.Reserved, icon: ClipboardList, note: 'Arrivals scheduled within 48h' },
-          { label: 'TURNAROUND', status: 'Cleaning' as RoomStatus, value: counts.Cleaning + counts.Maintenance, icon: Sparkles, note: `${counts.Cleaning} Cleaning · ${counts.Maintenance} Maintenance` },
+          { label: 'OCCUPIED', status: 'Occupied' as RoomStatus, value: counts.Occupied, icon: UsersRound, note: 'Currently checked in' },
+          { label: 'RESERVED', status: 'Reserved' as RoomStatus, value: counts.Reserved, icon: ClipboardList, note: 'Booked for current hotel date' },
         ]).map(({ label, status, value, icon: Icon, note }) => (
           <button
             type="button"
@@ -457,21 +561,21 @@ export function AdminRooms() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="font-display text-sm text-ink">Inventory Allocation &amp; Live Capacity</h2>
-            <p className="text-[9px] text-muted">{roomData.length} Total Operational Units</p>
+            <p className="text-[9px] text-muted">{activeRooms.length} Total Operational Units</p>
           </div>
-          <span className="inline-flex items-center gap-1.5 text-[9px] text-forest"><i className="size-1.5 rounded-full bg-emerald-600" /> Real-time PMS sync active</span>
+          <span className="inline-flex items-center gap-1.5 text-[9px] text-forest"><i className="size-1.5 rounded-full bg-emerald-600" /> Room status from hotel records</span>
         </div>
         <div className="mt-2 flex h-2 overflow-hidden bg-stone-100" aria-label="Room status allocation">
-          {(['Available', 'Occupied', 'Reserved', 'Cleaning', 'Maintenance'] as RoomStatus[]).map((status) => (
-            <div key={status} title={`${status}: ${counts[status]}`} className={`${statusDetails[status].accent} h-full`} style={{ width: `${counts[status] / roomData.length * 100}%` }} />
+          {(['Available', 'Occupied', 'Reserved'] as RoomStatus[]).map((status) => (
+            <div key={status} title={`${status}: ${counts[status]}`} className={`${statusDetails[status].accent} h-full`} style={{ width: `${activeRooms.length ? counts[status] / activeRooms.length * 100 : 0}%` }} />
           ))}
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5 text-[9px] text-muted">
-          {(['Available', 'Occupied', 'Reserved', 'Cleaning', 'Maintenance'] as RoomStatus[]).map((status) => (
-            <span key={status} className="inline-flex items-center gap-1"><i className={`size-1.5 rounded-full ${statusDetails[status].accent}`} />{status}: {counts[status]} ({(counts[status] / roomData.length * 100).toFixed(1)}%)</span>
+          {(['Available', 'Occupied', 'Reserved'] as RoomStatus[]).map((status) => (
+            <span key={status} className="inline-flex items-center gap-1"><i className={`size-1.5 rounded-full ${statusDetails[status].accent}`} />{status}: {counts[status]} ({(activeRooms.length ? counts[status] / activeRooms.length * 100 : 0).toFixed(1)}%)</span>
           ))}
         </div>
-        <p className="mt-2 text-[9px] text-muted">Victoria Island Waterfront Wing &amp; Marina Residences</p>
+        {isLoading && <p className="mt-2 text-[9px] text-muted">Loading hotel rooms…</p>}
       </section>
 
       <section className="mb-4 border border-stone-200 bg-white p-3 shadow-sm">
@@ -485,7 +589,7 @@ export function AdminRooms() {
             <span className="sr-only">Filter by room type</span>
             <select className={`${selectClass} w-full appearance-none pr-7`} value={roomType} onChange={(event) => changeFilter(setRoomType, event.target.value)}>
               <option>All Room Types</option>
-              {roomTypes.map((type) => <option key={type}>{type}</option>)}
+              {roomTypeNames.map((type) => <option key={type}>{type}</option>)}
             </select>
             <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2 top-3 size-3 text-muted" />
           </label>
@@ -493,7 +597,7 @@ export function AdminRooms() {
             <span className="sr-only">Filter by status</span>
             <select className={`${selectClass} w-full appearance-none pr-7`} value={statusFilter} onChange={(event) => changeFilter(setStatusFilter, event.target.value)}>
               <option>All Statuses</option>
-              {(['Available', 'Occupied', 'Reserved', 'Cleaning', 'Maintenance'] as RoomStatus[]).map((status) => <option key={status}>{status}</option>)}
+              {(['Available', 'Occupied', 'Reserved'] as RoomStatus[]).map((status) => <option key={status}>{status}</option>)}
             </select>
             <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2 top-3 size-3 text-muted" />
           </label>
@@ -506,6 +610,7 @@ export function AdminRooms() {
             <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2 top-3 size-3 text-muted" />
           </label>
           <div className="flex items-center justify-between gap-2 sm:justify-end">
+            <label className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[9px] text-muted"><input type="checkbox" checked={includeInactiveRooms} disabled={isLoading} onChange={(event) => { setPage(1); refreshRoomInventory(event.target.checked) }} />Include inactive</label>
             <button type="button" onClick={() => { setSearch(''); setRoomType('All Room Types'); setStatusFilter('All Statuses'); setFloorFilter('All Floors'); setPage(1) }} className="whitespace-nowrap text-[9px] text-muted hover:text-ink">Clear Filters</button>
             <span className="whitespace-nowrap text-[9px] text-muted">Showing {filteredRooms.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredRooms.length)} of {filteredRooms.length}</span>
             <div className="flex border border-stone-200">
@@ -521,19 +626,20 @@ export function AdminRooms() {
           {visibleRooms.map((room) => (
             <RoomCard key={room.id} room={room} selected={room.id === selectedId} onSelect={() => setSelectedId(room.id)} onEdit={() => editRoom(room)} />
           ))}
-          {visibleRooms.length === 0 && (
+          {isLoading && <div className="col-span-full border border-stone-200 bg-white px-5 py-12 text-center text-[11px] text-muted">Loading rooms from the hotel database…</div>}
+          {!isLoading && visibleRooms.length === 0 && (
             <div className="col-span-full border border-dashed border-stone-300 bg-white px-5 py-12 text-center">
               <BedDouble aria-hidden="true" className="mx-auto size-6 text-muted" />
-              <p className="mt-2 font-display text-lg text-ink">No rooms match those filters</p>
-              <p className="mt-1 text-[11px] text-muted">Try another room number, type, status, or floor.</p>
+              <p className="mt-2 font-display text-lg text-ink">{roomData.length ? 'No rooms match those filters' : 'No rooms in this hotel yet'}</p>
+              <p className="mt-1 text-[11px] text-muted">{roomData.length ? 'Try another room number, type, status, or floor.' : 'Create a room type first, then add physical rooms to your inventory.'}</p>
             </div>
           )}
         </div>
-        {selectedRoom && <RoomInspector room={selectedRoom} reservation={selectedReservation} onClose={() => setSelectedId('')} onStatusChange={updateSelectedStatus} onEdit={() => editRoom(selectedRoom)} />}
+        {selectedRoom && <RoomInspector room={selectedRoom} onClose={() => setSelectedId('')} onEdit={() => editRoom(selectedRoom)} onDeactivate={() => { if (window.confirm(`Deactivate room ${selectedRoom.name}?`)) void archiveRoom(selectedRoom.id) }} saving={saving} />}
       </div>
 
       <footer className="mt-4 flex flex-col gap-3 border border-stone-200 bg-white px-3 py-3 text-[9px] text-muted sm:flex-row sm:items-center sm:justify-between">
-        <span>Showing {filteredRooms.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredRooms.length)} of {filteredRooms.length} rooms across 4 Residential Wings</span>
+        <span>Showing {filteredRooms.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredRooms.length)} of {filteredRooms.length} rooms</span>
         <div className="flex items-center gap-2">
           <span>Rows per view:</span>
           <span className="inline-flex items-center gap-1 border border-stone-200 bg-stone-50 px-2 py-1.5 text-ink">{pageSize} keys <ChevronDown aria-hidden="true" className="size-3" /></span>
@@ -548,22 +654,9 @@ export function AdminRooms() {
         </div>
       </footer>
 
-      {dialog === 'room' && <RoomDialog onClose={() => setDialog(null)} onAdd={addRoom} />}
-      {editingRoom && <RoomEditDialog room={editingRoom} onClose={() => setEditingRoomId(null)} onSave={saveRoomChanges} />}
-      {dialog === 'types' && (
-        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/50 p-4" onMouseDown={() => setDialog(null)}>
-          <section role="dialog" aria-modal="true" aria-labelledby="room-types-title" className="w-full max-w-md border border-stone-200 bg-white p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
-            <div className="flex items-start justify-between">
-              <div><p className="text-[10px] font-semibold tracking-[0.15em] text-amber-800">ROOM CONFIGURATION</p><h2 id="room-types-title" className="mt-1 font-display text-xl text-ink">Manage Room Types</h2></div>
-              <button type="button" onClick={() => setDialog(null)} aria-label="Close room types" className="grid size-8 place-items-center text-muted hover:bg-stone-100"><X aria-hidden="true" className="size-4" /></button>
-            </div>
-            <div className="mt-4 divide-y divide-stone-100">
-              {roomSuites.map((suite) => <div key={suite.id} className="flex items-center justify-between gap-3 py-3"><span className="min-w-0"><strong className="block truncate text-[11px] font-semibold text-ink">{suite.fullName}</strong><small className="text-[10px] text-muted">{suite.details[0].label} · Max {suite.maxGuests} guests</small></span><strong className="shrink-0 text-[11px] text-amber-900">₦{currency.format(suite.priceValue)} / night</strong></div>)}
-            </div>
-            <button type="button" onClick={() => setDialog(null)} className="mt-3 w-full bg-forest px-4 py-2.5 text-[11px] font-semibold text-white hover:bg-forest-deep">Done</button>
-          </section>
-        </div>
-      )}
+      {dialog === 'room' && <RoomDialog roomTypes={activeRoomTypes} onClose={() => setDialog(null)} onSave={addRoom} saving={saving} error={actionError} />}
+      {editingRoom && <RoomEditDialog room={editingRoom} roomTypes={roomTypes} onClose={() => setEditingRoomId(null)} onSave={saveRoomChanges} saving={saving} error={actionError} />}
+      {dialog === 'types' && <RoomTypeManagerDialog roomTypes={roomTypes} onClose={() => setDialog(null)} onSave={saveRoomType} onDeactivate={archiveRoomType} onDeletePhoto={removeRoomTypePhoto} saving={saving} error={actionError} />}
     </section>
   )
 }

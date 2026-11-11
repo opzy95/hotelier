@@ -1,4 +1,19 @@
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+let accessToken: string | null = null
+let refreshRequest: Promise<string> | null = null
+
+export function setAccessToken(token: string) {
+  accessToken = token
+}
+
+export function clearAccessToken() {
+  accessToken = null
+}
+
+function expireAccessToken() {
+  clearAccessToken()
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('auth:expired'))
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -69,35 +84,82 @@ function getErrorMessage(status: number, code?: string, payload?: unknown, rawTe
   return code ? `The request could not be completed (${code}).` : `The request failed (HTTP ${status}).`
 }
 
-export async function apiRequest<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
+async function sendRequest(path: string, init: RequestInit, token: string | null) {
   const headers = new Headers(init.headers)
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
-  let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers })
+    return await fetch(`${API_BASE_URL}${path}`, { ...init, headers, credentials: 'include' })
   } catch {
     throw new Error(`Could not reach the hotel API at ${API_BASE_URL}. Make sure the backend is running.`)
   }
+}
 
+async function readResponse(response: Response) {
   const responseText = await response.text()
   let payload: unknown
+  let unreadable = false
   if (responseText) {
     try {
       payload = JSON.parse(responseText)
     } catch {
-      if (!response.ok) {
-        throw new ApiError(getErrorMessage(response.status, undefined, undefined, responseText), response.status)
-      }
-      throw new Error('The hotel API returned an unreadable response.')
+      unreadable = true
     }
   }
+  return { payload, responseText, unreadable }
+}
+
+async function refreshAccessToken() {
+  if (!refreshRequest) {
+    refreshRequest = (async () => {
+      let response: Response
+      try {
+        response = await fetch(`${API_BASE_URL}/auth/refresh`, { method: 'POST', credentials: 'include' })
+      } catch {
+        throw new Error(`Could not reach the hotel API at ${API_BASE_URL}. Make sure the backend is running.`)
+      }
+
+      const { payload, responseText, unreadable } = await readResponse(response)
+      if (response.status === 401) {
+        expireAccessToken()
+        throw new ApiError(getErrorMessage(401, getErrorCode(payload), payload, responseText), 401, getErrorCode(payload))
+      }
+      if (!response.ok) {
+        const code = getErrorCode(payload)
+        throw new ApiError(getErrorMessage(response.status, code, payload, responseText), response.status, code)
+      }
+      if (unreadable || typeof payload !== 'object' || payload === null || !('token' in payload) || typeof payload.token !== 'string' || !payload.token) {
+        throw new Error('The hotel API returned an invalid refresh response.')
+      }
+
+      setAccessToken(payload.token)
+      return payload.token
+    })().finally(() => { refreshRequest = null })
+  }
+  return refreshRequest
+}
+
+export async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const isLoginRequest = path.split('?')[0] === '/auth/login'
+  const tokenForRequest = isLoginRequest ? null : accessToken
+  let response = await sendRequest(path, init, tokenForRequest)
+
+  if (response.status === 401 && !isLoginRequest) {
+    const refreshedToken = accessToken && accessToken !== tokenForRequest
+      ? accessToken
+      : await refreshAccessToken()
+    response = await sendRequest(path, init, refreshedToken)
+    if (response.status === 401) expireAccessToken()
+  }
+
+  const { payload, responseText, unreadable } = await readResponse(response)
 
   if (!response.ok) {
     const code = getErrorCode(payload)
     throw new ApiError(getErrorMessage(response.status, code, payload, responseText), response.status, code)
   }
+  if (unreadable) throw new Error('The hotel API returned an unreadable response.')
 
   return payload as T
 }

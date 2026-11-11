@@ -1,4 +1,5 @@
-import { Navigate, Outlet, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import { Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom'
 import { AboutPage } from '../components/AboutPage'
 import { BookingsPage } from '../components/BookingsPage'
 import { BookYourStayPage } from '../components/BookYourStayPage'
@@ -53,8 +54,27 @@ function PublicLayout() {
   )
 }
 
+function ExpiredSessionRedirect() {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    function redirectToSignIn() {
+      const isPlatformPortal = window.location.pathname.startsWith('/platform') || window.location.pathname.startsWith('/super-admin')
+      sessionStorage.removeItem('selectedHotelId')
+      navigate(isPlatformPortal ? '/platform/login' : '/hotel/login', { replace: true })
+    }
+
+    window.addEventListener('auth:expired', redirectToSignIn)
+    return () => window.removeEventListener('auth:expired', redirectToSignIn)
+  }, [navigate])
+
+  return null
+}
+
 export function AppRoutes() {
   return (
+    <>
+    <ExpiredSessionRedirect />
     <Routes>
       <Route element={<PublicLayout />}>
         <Route path="/" element={<HomePage />} />
@@ -87,5 +107,6 @@ export function AppRoutes() {
       <Route path="/super-admin" element={<SuperAdminDashboard />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </>
   )
 }

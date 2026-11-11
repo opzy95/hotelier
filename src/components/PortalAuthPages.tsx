@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Building2, Eye, EyeOff, Hotel, LockKeyhole, Mail, MapPin, ShieldCheck, Sparkles, UserRound } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ApiError, apiRequest } from '../api'
+import { ApiError, apiRequest, clearAccessToken, setAccessToken } from '../api'
 import type { HotelMembership, PlatformLoginResponse, PlatformProfileResponse } from '../api'
 import heroImage from '../img/Opzy Luxury Hotel infinity lagoon pool at twilight in Victoria Island.png'
 
@@ -97,7 +97,6 @@ export function HotelAdminLoginPage() {
   const [needsVerification, setNeedsVerification] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hotelChoices, setHotelChoices] = useState<HotelMembership[]>([])
-  const [pendingToken, setPendingToken] = useState('')
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -113,17 +112,24 @@ export function HotelAdminLoginPage() {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       })
-      const profile = await apiRequest<PlatformProfileResponse>('/auth/me', {}, token)
+      setAccessToken(token)
+      const profile = await apiRequest<PlatformProfileResponse>('/auth/me')
       const memberships = profile.memberships.filter(({ role }) => role === 'manager')
       if (memberships.length === 0) {
+        clearAccessToken()
         setNotice('This account does not have manager access to a hotel.')
         return
       }
 
       sessionStorage.removeItem('pendingVerificationEmail')
-      setPendingToken(token)
+      if (memberships.length === 1) {
+        continueToHotel(memberships[0].hotelId)
+        return
+      }
+
       setHotelChoices(memberships)
     } catch (error) {
+      clearAccessToken()
       const isVerificationError = (error instanceof ApiError && error.code === 'email_not_verified') || (error instanceof Error && /verify|verification|not verified|email_not_verified/i.test(error.message))
       if (isVerificationError) {
         sessionStorage.setItem('pendingVerificationEmail', email)
@@ -138,9 +144,8 @@ export function HotelAdminLoginPage() {
   }
 
   function continueToHotel(hotelId: string) {
-    sessionStorage.setItem('hotelAccessToken', pendingToken)
     sessionStorage.setItem('selectedHotelId', hotelId)
-    navigate('/hotel/onboarding', { replace: true })
+    navigate('/dashboard/overview', { replace: true })
   }
 
   return (
@@ -153,7 +158,7 @@ export function HotelAdminLoginPage() {
               <span>{hotel.hotelName}</span><ArrowRight aria-hidden="true" className="size-4 text-forest" />
             </button>
           ))}
-          <button type="button" onClick={() => { setHotelChoices([]); setPendingToken(''); sessionStorage.removeItem('pendingVerificationEmail') }} className="w-full py-2 text-[10px] font-semibold text-forest underline-offset-2 hover:underline">Use another account</button>
+          <button type="button" onClick={() => { clearAccessToken(); sessionStorage.removeItem('selectedHotelId'); setHotelChoices([]); sessionStorage.removeItem('pendingVerificationEmail') }} className="w-full py-2 text-[10px] font-semibold text-forest underline-offset-2 hover:underline">Use another account</button>
         </div>
       ) : (
         <form onSubmit={(event) => { void submit(event) }} className="space-y-5">
@@ -450,15 +455,17 @@ export function SuperAdminLoginPage() {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       })
-      const profile = await apiRequest<PlatformProfileResponse>('/auth/me', {}, token)
+      setAccessToken(token)
+      const profile = await apiRequest<PlatformProfileResponse>('/auth/me')
       if (!profile.isPlatformOperator) {
+        clearAccessToken()
         setNotice('This account does not have platform administrator access.')
         return
       }
 
-      sessionStorage.setItem('platformAccessToken', token)
       navigate('/super-admin', { replace: true })
     } catch (error) {
+      clearAccessToken()
       const isVerificationError = (error instanceof ApiError && error.code === 'email_not_verified') || (error instanceof Error && /verify|verification|not verified|email_not_verified/i.test(error.message))
       if (isVerificationError) {
         sessionStorage.setItem('pendingVerificationEmail', email)

@@ -359,7 +359,7 @@ function CancelReservationDialog({ reservation, onClose, onConfirm }: {
 }
 
 export function AdminReservations() {
-  const { reservations: rows, setReservations, rooms, setRooms } = useAdminReservations()
+  const { reservations: rows, setReservations, rooms } = useAdminReservations()
   const [search, setSearch] = useState('')
   const [folioFilter, setFolioFilter] = useState('All folio statuses')
   const [paymentFilter, setPaymentFilter] = useState('All payment statuses')
@@ -413,26 +413,9 @@ export function AdminReservations() {
   function cancelReservation() {
     if (!reservationToCancel) return
     const cancelled = reservationToCancel
-    const remainingRoomReservations = rows.filter((reservation) => (
-      reservation.reference !== cancelled.reference
-      && reservation.assignedRoomId === cancelled.assignedRoomId
-      && !['Cancelled', 'Checked Out'].includes(reservation.folio)
-    ))
-    const linkedReservation = remainingRoomReservations.find((reservation) => reservation.folio === 'Checked In')
-      ?? remainingRoomReservations[0]
-
     setReservations((current) => current.map((reservation) => reservation.reference === cancelled.reference
       ? { ...reservation, folio: 'Cancelled' }
       : reservation))
-    if (cancelled.assignedRoomId) {
-      setRooms((current) => current.map((room) => {
-        if (room.id !== cancelled.assignedRoomId) return room
-        const status = linkedReservation
-          ? linkedReservation.folio === 'Checked In' ? 'Occupied' : 'Reserved'
-          : ['Cleaning', 'Maintenance'].includes(room.status) ? room.status : 'Available'
-        return { ...room, status, guest: linkedReservation?.guest, note: linkedReservation?.reference }
-      }))
-    }
     setSelectedReservation(null)
     setReservationToCancel(null)
   }

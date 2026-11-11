@@ -4,6 +4,8 @@ import { ArrowRight, Check, Hotel, LoaderCircle, ShieldCheck } from 'lucide-reac
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { ApiError, apiRequest } from '../api'
 import type { HotelOnboardingResponse, PlatformProfileResponse } from '../api'
+import { HotelSessionProvider } from '../admin/HotelSessionContext'
+import type { HotelSessionIdentity } from '../admin/HotelSessionContext'
 
 function OnboardingFrame({ eyebrow, title, description, wide = false, children }: {
   eyebrow: string
@@ -332,7 +334,6 @@ function HotelSettingsStep({ onComplete, isSaving, error }: {
 
 export function HotelOnboardingPage() {
   const navigate = useNavigate()
-  const [token] = useState(() => sessionStorage.getItem('hotelAccessToken') ?? '')
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
   const [onboarding, setOnboarding] = useState<HotelOnboardingResponse | null>(null)
   const [plans, setPlans] = useState<OnboardingPlan[]>([])
@@ -343,18 +344,18 @@ export function HotelOnboardingPage() {
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    if (!token || !hotelId) return
+    if (!hotelId) return
     let cancelled = false
 
     async function loadSetup() {
       setLoading(true)
       setError('')
       try {
-        const profile = await apiRequest<PlatformProfileResponse>('/auth/me', {}, token)
+        const profile = await apiRequest<PlatformProfileResponse>('/auth/me')
         const membership = profile.memberships.find((item) => item.hotelId === hotelId && item.role === 'manager')
         if (!membership) throw new Error('You do not have manager access to this hotel.')
 
-        const current = await apiRequest<HotelOnboardingResponse>(`/hotels/${encodeURIComponent(hotelId)}/onboarding`, {}, token)
+        const current = await apiRequest<HotelOnboardingResponse>(`/hotels/${encodeURIComponent(hotelId)}/onboarding`)
         if (cancelled) return
         setOnboarding(current)
         if (current.currentStep === 'choose_plan') {
@@ -365,7 +366,6 @@ export function HotelOnboardingPage() {
       } catch (requestError) {
         if (!cancelled) {
           if (requestError instanceof ApiError && requestError.status === 401) {
-            sessionStorage.removeItem('hotelAccessToken')
             sessionStorage.removeItem('selectedHotelId')
             navigate('/hotel/login', { replace: true })
             return
@@ -379,7 +379,7 @@ export function HotelOnboardingPage() {
 
     void loadSetup()
     return () => { cancelled = true }
-  }, [hotelId, navigate, reloadKey, token])
+  }, [hotelId, navigate, reloadKey])
 
   async function selectPlan(planId: string, billingInterval?: string) {
     setSaving(true)
@@ -388,7 +388,7 @@ export function HotelOnboardingPage() {
       const result = await apiRequest<{ paymentRequired: boolean }>(`/hotels/${encodeURIComponent(hotelId)}/subscription`, {
         method: 'PUT',
         body: JSON.stringify({ planId, ...(billingInterval ? { billingInterval } : {}) }),
-      }, token)
+      })
       setPaymentNotice(result.paymentRequired)
       setReloadKey((key) => key + 1)
     } catch (requestError) {
@@ -405,7 +405,7 @@ export function HotelOnboardingPage() {
       await apiRequest(`/hotels/${encodeURIComponent(hotelId)}/settings`, {
         method: 'PATCH',
         body: JSON.stringify(settings),
-      }, token)
+      })
       setReloadKey((key) => key + 1)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not save hotel settings.')
@@ -414,7 +414,7 @@ export function HotelOnboardingPage() {
     }
   }
 
-  if (!token || !hotelId) return <Navigate to="/hotel/login" replace />
+  if (!hotelId) return <Navigate to="/hotel/login" replace />
   if (onboarding?.currentStep === 'complete' && !loading) return <Navigate to="/dashboard/overview" replace />
 
   const planOptions = getPlanOptions(plans)
@@ -497,28 +497,34 @@ export function HotelOnboardingPage() {
 
 export function HotelDashboardGate({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
-  const [token] = useState(() => sessionStorage.getItem('hotelAccessToken') ?? '')
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
   const [isReady, setIsReady] = useState(false)
+  const [identity, setIdentity] = useState<HotelSessionIdentity | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!token || !hotelId) return
+    if (!hotelId) return
     let cancelled = false
 
     async function verifySetup() {
       try {
-        const profile = await apiRequest<PlatformProfileResponse>('/auth/me', {}, token)
+        const profile = await apiRequest<PlatformProfileResponse>('/auth/me')
         const membership = profile.memberships.find((item) => item.hotelId === hotelId && item.role === 'manager')
         if (!membership) throw new Error('You do not have manager access to this hotel.')
-        const status = await apiRequest<HotelOnboardingResponse>(`/hotels/${encodeURIComponent(hotelId)}/onboarding`, {}, token)
+        const status = await apiRequest<HotelOnboardingResponse>(`/hotels/${encodeURIComponent(hotelId)}/onboarding`)
         if (cancelled) return
-        if (status.currentStep === 'complete') setIsReady(true)
+        if (status.currentStep === 'complete') {
+          setIdentity({
+            hotelName: membership.hotelName,
+            managerName: profile.user.name.trim() || profile.user.email,
+            managerRole: membership.role.replaceAll('_', ' ').toUpperCase(),
+          })
+          setIsReady(true)
+        }
         else navigate('/hotel/onboarding', { replace: true })
       } catch (requestError) {
         if (cancelled) return
         if (requestError instanceof ApiError && requestError.status === 401) {
-          sessionStorage.removeItem('hotelAccessToken')
           sessionStorage.removeItem('selectedHotelId')
           navigate('/hotel/login', { replace: true })
           return
@@ -529,10 +535,10 @@ export function HotelDashboardGate({ children }: { children: ReactNode }) {
 
     void verifySetup()
     return () => { cancelled = true }
-  }, [hotelId, navigate, token])
+  }, [hotelId, navigate])
 
-  if (!token || !hotelId) return <Navigate to="/hotel/login" replace />
+  if (!hotelId) return <Navigate to="/hotel/login" replace />
   if (error) return <OnboardingFrame eyebrow="HOTEL ACCESS" title="Could not open your dashboard" description="We could not verify your account and hotel setup."><Notice>{error}</Notice><button type="button" onClick={() => window.location.reload()} className="mt-4 text-xs font-semibold text-forest underline-offset-2 hover:underline">Try again</button></OnboardingFrame>
-  if (!isReady) return <OnboardingFrame eyebrow="HOTEL ACCESS" title="Checking your setup" description="Confirming your hotel account and onboarding status."><LoadingPanel /></OnboardingFrame>
-  return children
+  if (!isReady || !identity) return <OnboardingFrame eyebrow="HOTEL ACCESS" title="Checking your setup" description="Confirming your hotel account and onboarding status."><LoadingPanel /></OnboardingFrame>
+  return <HotelSessionProvider value={identity}>{children}</HotelSessionProvider>
 }

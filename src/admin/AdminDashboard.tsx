@@ -20,8 +20,9 @@ import {
   reservationOutstandingAmount,
   reservationPaidAmount,
 } from './adminReservationsData'
-import { getOperationalRooms, getRoomStatusCounts } from './adminRoomsData'
+import { getRoomStatusCounts } from './adminRoomsData'
 import { useAdminStaff } from './AdminStaffContext'
+import { useHotelSession } from './HotelSessionContext'
 
 type OperationTab = 'Arrivals' | 'Departures'
 type OperationStatus = 'Check In' | 'Checked In' | 'Pre-Assigned' | 'Check Out' | 'Checked Out'
@@ -76,6 +77,14 @@ function MetricCard({ label, value, note, icon: Icon, change }: {
 export function AdminDashboard() {
   const { reservations, rooms } = useAdminReservations()
   const { staff, departments } = useAdminStaff()
+  const { hotelName, managerName } = useHotelSession()
+  const todayLabel = new Date().toLocaleDateString('en-GB', {
+    timeZone: 'Africa/Lagos',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
   const [operationTab, setOperationTab] = useState<OperationTab>('Arrivals')
   const [operations, setOperations] = useState(initialOperations)
   const [search, setSearch] = useState('')
@@ -100,15 +109,13 @@ export function AdminDashboard() {
       ? operation.status === 'Check In' || operation.status === 'Checked In' || operation.status === 'Pre-Assigned'
       : operation.status === 'Check Out' || operation.status === 'Checked Out'
   ))
-  const operationalRooms = useMemo(() => getOperationalRooms(rooms, reservations), [reservations, rooms])
+  const operationalRooms = rooms.filter((room) => room.active)
   const roomCounts = getRoomStatusCounts(operationalRooms)
   const onDutyStaff = staff.filter((member) => member.status === 'On Duty').length
   const roomStatuses = [
     { label: 'Available', count: roomCounts.Available, dot: 'bg-emerald-500', bar: 'bg-emerald-500' },
     { label: 'Occupied', count: roomCounts.Occupied, dot: 'bg-amber-800', bar: 'bg-amber-800' },
     { label: 'Reserved', count: roomCounts.Reserved, dot: 'bg-sky-500', bar: 'bg-sky-500' },
-    { label: 'Cleaning', count: roomCounts.Cleaning, dot: 'bg-amber-400', bar: 'bg-amber-400' },
-    { label: 'Maintenance / Inspection', count: roomCounts.Maintenance, dot: 'bg-rose-500', bar: 'bg-rose-500' },
   ]
   const collectedAmount = reservationCollectedAmount(reservations)
   const outstandingAmount = reservationOutstandingAmount(reservations)
@@ -129,7 +136,7 @@ export function AdminDashboard() {
         <div>
           <p className="text-[9px] font-semibold tracking-[0.17em] text-amber-800">EXECUTIVE OPERATIONS</p>
           <h1 className="mt-1 font-display text-2xl text-ink sm:text-3xl">Dashboard Overview</h1>
-          <p className="mt-1 text-xs text-muted">Welcome back, General Manager <span className="mx-1">·</span> Friday, 24 October 2025 <span className="mx-1">·</span> Victoria Island Lagoon Front</p>
+          <p className="mt-1 text-xs text-muted">Welcome back, {managerName} <span className="mx-1">·</span> {todayLabel} <span className="mx-1">·</span> {hotelName}</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <label className="flex min-w-0 items-center gap-2 rounded-sm border border-stone-200 bg-white px-3 py-2 sm:w-64">

@@ -14,14 +14,16 @@ import {
   UsersRound,
   X,
 } from 'lucide-react'
-import { Link, NavLink, Outlet, useLocation, useParams } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { apiRequest, clearAccessToken } from '../api'
+import { useHotelSession } from './HotelSessionContext'
 import { AdminReservationsProvider } from './AdminReservationsContext'
 import { AdminStaffProvider } from './AdminStaffContext'
 
 const primaryNavigation = [
   { label: 'Overview', path: 'overview', icon: LayoutDashboard },
   { label: 'Reservations', path: 'reservations', icon: CalendarDays },
-  { label: 'Rooms', path: 'rooms', icon: BedDouble, meta: '80 Total' },
+  { label: 'Rooms', path: 'rooms', icon: BedDouble },
   { label: 'Guests', path: 'guests', icon: UsersRound },
   { label: 'Check-in / Check-out', path: 'check-in', icon: DoorOpen, notification: true },
   { label: 'Payments', path: 'payments', icon: CreditCard },
@@ -47,7 +49,7 @@ const sectionTitles: Record<string, string> = {
 function NavigationLinks({ onNavigate }: { onNavigate: () => void }) {
   return (
     <>
-      {primaryNavigation.map(({ label, path, icon: Icon, meta, notification }) => (
+      {primaryNavigation.map(({ label, path, icon: Icon, notification }) => (
         <NavLink
           key={path}
           to={`/dashboard/${path}`}
@@ -60,7 +62,6 @@ function NavigationLinks({ onNavigate }: { onNavigate: () => void }) {
         >
           <Icon aria-hidden="true" className="size-4 shrink-0" strokeWidth={1.7} />
           <span className="min-w-0 flex-1">{label}</span>
-          {meta && <span className="text-[10px] text-white/45">{meta}</span>}
           {notification && <span className="size-1.5 rounded-full bg-champagne" />}
         </NavLink>
       ))}
@@ -87,6 +88,9 @@ function NavigationLinks({ onNavigate }: { onNavigate: () => void }) {
 export function AdminLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [now] = useState(() => new Date())
+  const [isSigningOut, setIsSigningOut] = useState(false)
+  const navigate = useNavigate()
+  const { hotelName, managerName, managerRole } = useHotelSession()
   const location = useLocation()
   const pageName = location.pathname.split('/').pop()?.replaceAll('-', ' ') ?? 'overview'
   const title = pageName.replace(/\b\w/g, (letter) => letter.toUpperCase())
@@ -107,6 +111,18 @@ export function AdminLayout() {
     setSidebarOpen(false)
   }
 
+  async function signOut() {
+    if (isSigningOut) return
+    setIsSigningOut(true)
+    try {
+      await apiRequest('/auth/logout', { method: 'POST' })
+    } catch {} finally {
+      clearAccessToken()
+      sessionStorage.removeItem('selectedHotelId')
+      navigate('/hotel/login', { replace: true })
+    }
+  }
+
   return (
     <AdminReservationsProvider>
     <AdminStaffProvider>
@@ -119,10 +135,10 @@ export function AdminLayout() {
           onClick={closeSidebar}
           className="flex min-h-[92px] flex-col justify-center gap-2 border-b border-white/10 px-5 no-underline"
         >
-          <span className="font-display text-sm tracking-wide text-white">✥ OPZY LUXURY HOTEL</span>
+          <span className="truncate font-display text-sm tracking-wide text-white">{hotelName}</span>
           <span className="flex gap-2 text-[8px] font-semibold tracking-[0.12em] text-white/45">
             <span className="border border-champagne/50 px-1 py-0.5 text-champagne">MANAGER PORTAL</span>
-            <span>VICTORIA ISLAND</span>
+            <span className="truncate">{managerRole}</span>
           </span>
         </Link>
 
@@ -132,12 +148,12 @@ export function AdminLayout() {
         </nav>
 
         <div className="flex min-h-[62px] items-center gap-2 border-t border-white/10 px-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-champagne/70 bg-champagne/10 text-xs font-semibold text-champagne">TA</span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-champagne/70 bg-champagne/10 text-xs font-semibold text-champagne">{managerName.split(/\s+/).slice(0, 2).map((part) => part[0] ?? '').join('').toUpperCase()}</span>
           <span className="grid min-w-0 flex-1 gap-0.5">
-            <strong className="truncate text-[11px] font-medium">Tariq Adeleke</strong>
-            <small className="text-[8px] tracking-wide text-white/50">GENERAL MANAGER</small>
+            <strong className="truncate text-[11px] font-medium">{managerName}</strong>
+            <small className="text-[8px] tracking-wide text-white/50">{managerRole}</small>
           </span>
-          <LogOut aria-hidden="true" className="size-3.5 text-white/50" />
+          <button type="button" onClick={() => { void signOut() }} disabled={isSigningOut} aria-label="Sign out of hotel portal" title="Sign out" className="grid size-8 shrink-0 place-items-center text-white/50 transition-colors hover:text-white disabled:opacity-40"><LogOut aria-hidden="true" className="size-3.5" /></button>
         </div>
       </aside>
 
@@ -168,7 +184,7 @@ export function AdminLayout() {
             <span aria-hidden="true" className="hidden md:inline">›</span>
             <strong className="truncate text-ink">{title.toUpperCase()}</strong>
           </div>
-          <p className="mt-1 truncate text-[10px] text-muted">Victoria Island Lagoon Front · Welcome back, General Manager</p>
+          <p className="mt-1 truncate text-[10px] text-muted">{hotelName} · Welcome back, {managerName}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-4">
           <span className="hidden items-center gap-2 text-[10px] text-muted xl:flex">

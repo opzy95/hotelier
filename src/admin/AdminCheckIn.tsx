@@ -169,7 +169,7 @@ function WalkInDialog({ date, reservations, rooms, onClose, onCreate }: {
 }
 
 export function AdminCheckIn() {
-  const { reservations, setReservations, rooms, setRooms } = useAdminReservations()
+  const { reservations, setReservations, rooms } = useAdminReservations()
   const [selectedDate, setSelectedDate] = useState(todayKey)
   const [activeTab, setActiveTab] = useState<OperationsTab>('Arrivals')
   const [search, setSearch] = useState('')
@@ -217,11 +217,6 @@ export function AdminCheckIn() {
     setReservations((current) => current.map((item) => item.reference === reservation.reference
       ? { ...item, folio: 'Checked In' }
       : item))
-    if (reservation.assignedRoomId) {
-      setRooms((current) => current.map((room) => room.id === reservation.assignedRoomId
-        ? { ...room, status: 'Occupied', guest: reservation.guest, note: reservation.reference }
-        : room))
-    }
     setActiveTab('In-House Guests')
   }
 
@@ -229,19 +224,11 @@ export function AdminCheckIn() {
     setReservations((current) => current.map((item) => item.reference === reservation.reference
       ? { ...item, folio: 'Checked Out' }
       : item))
-    if (reservation.assignedRoomId) {
-      setRooms((current) => current.map((room) => room.id === reservation.assignedRoomId
-        ? { ...room, status: 'Cleaning', guest: undefined, note: 'CHECK-OUT · TURNAROUND REQUIRED' }
-        : room))
-    }
     setActiveTab('Departures')
   }
 
-  function createWalkIn(reservation: Reservation, room: Room) {
+  function createWalkIn(reservation: Reservation) {
     setReservations((current) => [reservation, ...current])
-    setRooms((current) => current.map((item) => item.id === room.id
-      ? { ...item, status: 'Occupied', guest: reservation.guest, note: reservation.reference }
-      : item))
     setSelectedReference(reservation.reference)
     setShowWalkIn(false)
     setActiveTab('In-House Guests')

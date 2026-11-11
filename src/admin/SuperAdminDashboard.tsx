@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { Link, Navigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
-import { ApiError, apiRequest } from '../api'
+import { ApiError, apiRequest, clearAccessToken } from '../api'
 import type { PlatformHotelsResponse, PlatformProfileResponse } from '../api'
 
 type HotelStatus = 'Active' | 'Onboarding' | 'Paused'
@@ -59,7 +59,8 @@ function errorMessage(error: unknown) {
 
 export function SuperAdminDashboard() {
   const [currentYear] = useState(() => new Date().getFullYear())
-  const [accessToken, setAccessToken] = useState(() => sessionStorage.getItem('platformAccessToken'))
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isSigningOut, setIsSigningOut] = useState(false)
   const [profile, setProfile] = useState<PlatformProfileResponse['user'] | null>(null)
   const [hotels, setHotels] = useState<Hotel[]>([])
   const [totalHotels, setTotalHotels] = useState(0)
@@ -77,21 +78,20 @@ export function SuperAdminDashboard() {
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    if (!accessToken) return
-    const token = accessToken
     let cancelled = false
 
     async function loadPortfolio() {
       setIsLoading(true)
       setError('')
       try {
-        const account = await apiRequest<PlatformProfileResponse>('/auth/me', {}, token)
+        const account = await apiRequest<PlatformProfileResponse>('/auth/me')
         if (!account.isPlatformOperator) {
-          sessionStorage.removeItem('platformAccessToken')
-          if (!cancelled) setAccessToken(null)
+          clearAccessToken()
+          if (!cancelled) setIsAuthenticated(false)
           return
         }
-        const result = await apiRequest<PlatformHotelsResponse>(`/platform/hotels?page=${page}&limit=${pageSize}`, {}, token)
+        if (!cancelled) setIsAuthenticated(true)
+        const result = await apiRequest<PlatformHotelsResponse>(`/platform/hotels?page=${page}&limit=${pageSize}`)
         if (cancelled) return
         setProfile(account.user)
         setHotels(result.data.map(normalizeHotel))
@@ -99,8 +99,8 @@ export function SuperAdminDashboard() {
       } catch (requestError) {
         if (cancelled) return
         if (requestError instanceof ApiError && (requestError.status === 401 || requestError.status === 403)) {
-          sessionStorage.removeItem('platformAccessToken')
-          setAccessToken(null)
+          clearAccessToken()
+          setIsAuthenticated(false)
           return
         }
         setError(errorMessage(requestError))
@@ -111,7 +111,7 @@ export function SuperAdminDashboard() {
 
     void loadPortfolio()
     return () => { cancelled = true }
-  }, [accessToken, page, reloadKey])
+  }, [page, reloadKey])
 
   useEffect(() => {
     if (!openActionMenuHotelId) return
@@ -153,7 +153,7 @@ export function SuperAdminDashboard() {
   const userInitials = userName.split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'SA'
 
   async function toggleHotelStatus(hotel: Hotel) {
-    if (!accessToken || updatingHotelId) return
+    if (!isAuthenticated || updatingHotelId) return
     const nextStatus = displayStatus(hotel) === 'Active' ? 'suspended' : 'active'
     setUpdatingHotelId(hotel.id)
     setStatusError('')
@@ -161,7 +161,7 @@ export function SuperAdminDashboard() {
       const result = await apiRequest<{ hotel: ApiHotel }>(`/platform/hotels/${encodeURIComponent(hotel.id)}/status`, {
         method: 'PATCH',
         body: JSON.stringify({ status: nextStatus }),
-      }, accessToken)
+      })
       const updatedHotel = normalizeHotel(result.hotel)
       setHotels((current) => current.map((item) => item.id === hotel.id ? updatedHotel : item))
     } catch (requestError) {
@@ -171,12 +171,19 @@ export function SuperAdminDashboard() {
     }
   }
 
-  function signOut() {
-    sessionStorage.removeItem('platformAccessToken')
-    setAccessToken(null)
+  async function signOut() {
+    if (isSigningOut) return
+    setIsSigningOut(true)
+    try {
+      await apiRequest('/auth/logout', { method: 'POST' })
+    } catch {} finally {
+      clearAccessToken()
+      sessionStorage.removeItem('selectedHotelId')
+      setIsAuthenticated(false)
+    }
   }
 
-  if (!accessToken) return <Navigate to="/platform/login" replace />
+  if (!isAuthenticated) return isLoading ? <div className="grid min-h-screen place-items-center text-sm text-muted">Checking platform session…</div> : <Navigate to="/platform/login" replace />
 
   return (
     <div className="min-h-screen bg-[#f6f7f5] font-body text-ink">
@@ -199,7 +206,7 @@ export function SuperAdminDashboard() {
           <div className="flex items-center gap-2.5">
             <span className="grid size-8 place-items-center rounded-full bg-champagne/15 text-[10px] font-semibold text-champagne">{userInitials}</span>
             <span className="min-w-0 flex-1"><strong className="block truncate text-[10px] font-medium">{userName}</strong><small className="text-[8px] tracking-wide text-white/45">SUPER ADMIN</small></span>
-            <button type="button" onClick={signOut} className="text-[9px] text-white/55 hover:text-white">Sign out</button>
+            <button type="button" onClick={() => { void signOut() }} disabled={isSigningOut} className="text-[9px] text-white/55 hover:text-white disabled:opacity-40">{isSigningOut ? 'Signing out…' : 'Sign out'}</button>
           </div>
         </div>
       </aside>
