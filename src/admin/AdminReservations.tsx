@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowDownToLine,
@@ -16,29 +16,58 @@ import {
   X,
 } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
-import { reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
+import { currencyMinorUnitScale, reservationBalanceDue, reservationPaidAmount } from './adminReservationsData'
 import type { FolioStatus, PaymentStatus, Reservation } from './adminReservationsData'
-import { getAvailableRoomsForStay } from './adminRoomsData'
-import type { Room } from './adminRoomsData'
+import { createPaymentIdempotencyKey, createReservation as createReservationRequest, fetchReservationAvailability, fetchReservations, fetchReservationPayments, recordReservationPayment, updateReservationStatus } from './adminReservationsApi'
+import type { PaymentMethod, ReservationAvailability, ReservationDraft, ReservationPayment, ReservationPaymentRecord } from './adminReservationsApi'
+import type { Room, RoomType } from './adminRoomsData'
 
-const folioOptions: FolioStatus[] = ['Confirmed', 'Checked In', 'Pending Payment', 'Cancelled', 'Checked Out']
+const folioOptions: FolioStatus[] = ['Confirmed', 'Checked In', 'Pending Payment', 'Cancelled', 'Checked Out', 'No Show']
 const paymentOptions: PaymentStatus[] = ['Paid', 'Partially Paid', 'Pending', 'Refunded']
-const defaultRoomOptions = ['Executive Lagoon Suite', 'Presidential Sanctuary Penthouse', 'Deluxe Lagoon Room', 'Waterfront Villa']
+const paymentMethods: { value: PaymentMethod; label: string }[] = [
+  { value: 'cash', label: 'Cash' },
+  { value: 'card', label: 'Card' },
+  { value: 'bank_transfer', label: 'Bank transfer' },
+  { value: 'mobile_money', label: 'Mobile money' },
+  { value: 'other', label: 'Other' },
+]
 const today = new Date()
 const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+const rowsPerPage = 5
+
+function formatAmount(amount: number, currency = 'NGN') {
+  return new Intl.NumberFormat('en-NG', {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 0,
+  }).format(amount)
+}
+
+function reservationStatusFilter(value: string) {
+  const statuses: Record<string, string> = {
+    Confirmed: 'confirmed',
+    'Checked In': 'checked_in',
+    Cancelled: 'cancelled',
+    'Checked Out': 'checked_out',
+    'No Show': 'no_show',
+  }
+  return statuses[value]
+}
+
+function checkInDateRange(value: string) {
+  const monthOffset = value === 'Next month' ? 1 : 0
+  const start = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1)
+  const end = new Date(today.getFullYear(), today.getMonth() + monthOffset + 1, 0)
+  const dateValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return { checkInFrom: dateValue(start), checkInTo: dateValue(end) }
+}
 
 function isUpcomingReservation(reservation: Reservation) {
   return reservation.checkIn > todayKey && ['Confirmed', 'Pending Payment'].includes(reservation.folio)
 }
 
-function inventoryTypeMatches(room: Room, roomType: string) {
-  if (roomType === 'Presidential Sanctuary Penthouse') return room.type.toLowerCase().includes('presidential')
-  if (roomType === 'Waterfront Villa') return room.type.toLowerCase().includes('villa')
-  return room.type === roomType
-}
-
-function roomDisplayName(roomId: string | undefined, inventory: Room[]) {
-  return inventory.find((room) => room.id === roomId)?.name ?? (roomId ? `Room ${roomId}` : 'Room not assigned')
+function roomDisplayName(roomId: string | undefined, inventory: Room[], assignedRoomName?: string) {
+  return inventory.find((room) => room.id === roomId)?.name ?? assignedRoomName ?? (roomId ? `Room ${roomId}` : 'Room not assigned')
 }
 
 function nightsBetween(checkIn: string, checkOut: string) {
@@ -51,6 +80,17 @@ function shortDate(value: string) {
   return new Date(`${value}T12:00:00`).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
 }
 
+function formatPaymentDate(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function paymentMethodLabel(method: PaymentMethod) {
+  return paymentMethods.find((option) => option.value === method)?.label ?? method
+}
+
 function statusStyle(status: FolioStatus | PaymentStatus) {
   const styles: Record<FolioStatus | PaymentStatus, string> = {
     Confirmed: 'border-emerald-200 bg-emerald-50 text-emerald-800',
@@ -58,6 +98,7 @@ function statusStyle(status: FolioStatus | PaymentStatus) {
     'Pending Payment': 'border-amber-200 bg-amber-50 text-amber-800',
     Cancelled: 'border-rose-200 bg-rose-50 text-rose-700',
     'Checked Out': 'border-stone-200 bg-stone-100 text-stone-600',
+    'No Show': 'border-rose-200 bg-rose-50 text-rose-700',
     Paid: 'border-emerald-200 bg-emerald-50 text-emerald-800',
     'Partially Paid': 'border-amber-200 bg-amber-50 text-amber-900',
     Pending: 'border-amber-200 bg-amber-50 text-amber-800',
@@ -81,54 +122,97 @@ function exportReservations(rows: Reservation[]) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
+function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, roomLoading, roomError }: {
   onClose: () => void
-  onCreate: (reservation: Reservation) => void
-  reservations: Reservation[]
+  onCreate: (reservation: ReservationDraft, initialPayment?: ReservationPayment) => Promise<Reservation>
+  hotelId: string
   inventory: Room[]
+  roomTypes: RoomType[]
+  roomLoading: boolean
+  roomError: string
 }) {
   const [step, setStep] = useState(0)
-  const [roomOptions] = useState(() => [...new Set([...defaultRoomOptions, ...inventory.map((item) => item.type)])])
-  const [room, setRoom] = useState('Deluxe Lagoon Room')
+  const [selectedRoomTypeId, setSelectedRoomTypeId] = useState('')
   const [checkIn, setCheckIn] = useState('')
   const [checkOut, setCheckOut] = useState('')
   const [assignedRoomId, setAssignedRoomId] = useState('')
   const [formError, setFormError] = useState('')
-  const [amountReceived, setAmountReceived] = useState('0')
   const [adults, setAdults] = useState('2')
   const [children, setChildren] = useState('0')
   const [guestName, setGuestName] = useState('')
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
+  const [initialPaymentAmount, setInitialPaymentAmount] = useState('')
+  const [initialPaymentMethod, setInitialPaymentMethod] = useState<PaymentMethod>('cash')
+  const [initialPaymentIdempotencyKey, setInitialPaymentIdempotencyKey] = useState(createPaymentIdempotencyKey)
+  const [saving, setSaving] = useState(false)
+  const [availabilityState, setAvailabilityState] = useState<{
+    queryKey: string
+    result?: ReservationAvailability
+    error?: string
+  }>({ queryKey: '' })
   const nights = nightsBetween(checkIn, checkOut)
-  const availableRooms = getAvailableRoomsForStay(
-    inventory,
-    reservations,
-    checkIn,
-    checkOut,
-    Number(adults) + Number(children),
-    (roomItem) => inventoryTypeMatches(roomItem, room),
-  )
+  const activeRoomTypes = roomTypes.filter((roomType) => roomType.active)
+  const selectedRoomType = activeRoomTypes.find((roomType) => roomType.id === selectedRoomTypeId) ?? activeRoomTypes[0]
+  const hasValidStay = Boolean(checkIn && checkOut > checkIn)
+  const roomTypeId = selectedRoomType?.id ?? ''
+  const availabilityQueryKey = [hotelId, checkIn, checkOut, roomTypeId, adults, children].join('|')
+  const hasCurrentAvailability = availabilityState.queryKey === availabilityQueryKey
+  const availability = hasCurrentAvailability ? availabilityState.result : undefined
+  const availabilityError = hasCurrentAvailability
+    ? availabilityState.error ?? ''
+    : hasValidStay && !hotelId ? 'Select a hotel to check room availability.' : ''
+  const availabilityLoading = hasValidStay && Boolean(roomTypeId) && !availabilityError && !availability
+  const availableRooms = availability?.availableRooms ?? []
   const selectedRoom = availableRooms.find((availableRoom) => availableRoom.id === assignedRoomId)
-  const nightlyRate = selectedRoom?.rate ?? inventory.find((availableRoom) => inventoryTypeMatches(availableRoom, room))?.rate ?? 0
-  const totalAmount = nightlyRate * nights
-  const paidAmount = Math.min(totalAmount, Math.max(0, Number(amountReceived) || 0))
-  const balanceDue = totalAmount - paidAmount
-  const payment: PaymentStatus = paidAmount === 0 ? 'Pending' : paidAmount >= totalAmount ? 'Paid' : 'Partially Paid'
+  const selectedRoomInventory = inventory.find((room) => room.id === assignedRoomId)
+  const currency = availability?.pricing.currency ?? selectedRoomInventory?.currency ?? selectedRoomType?.currency ?? 'NGN'
+  const minorUnitScale = currencyMinorUnitScale(currency)
+  const nightlyRate = availability ? availability.pricing.rateMinorPerNight / minorUnitScale : 0
+  const totalAmount = availability ? availability.pricing.totalMinor / minorUnitScale : 0
 
-  function submitReservation(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    if (!hotelId || !roomTypeId || !hasValidStay) return
+
+    let cancelled = false
+    void fetchReservationAvailability(hotelId, {
+      checkIn,
+      checkOut,
+      roomTypeId,
+      adults: Number(adults),
+      children: Number(children),
+    })
+      .then((result) => {
+        if (!cancelled) setAvailabilityState({ queryKey: availabilityQueryKey, result })
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setAvailabilityState({
+            queryKey: availabilityQueryKey,
+            error: error instanceof Error ? error.message : 'Could not check room availability.',
+          })
+        }
+      })
+
+    return () => { cancelled = true }
+  }, [adults, availabilityQueryKey, checkIn, checkOut, children, hasValidStay, hotelId, roomTypeId])
+
+  async function submitReservation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if ((step === 0 || step === 2) && (!checkIn || !checkOut || checkOut <= checkIn)) {
       setFormError('Choose a valid check-in and check-out date. Check-out must be after check-in.')
       return
     }
-    if ((step === 0 || step === 2) && !availableRooms.some((availableRoom) => availableRoom.id === assignedRoomId)) {
-      setFormError('Choose an available room for the selected dates before continuing.')
+    if ((step === 0 || step === 2) && (!selectedRoomType || !availableRooms.some((availableRoom) => availableRoom.id === assignedRoomId))) {
+      setFormError('Choose a room type and an available room for the selected guest count.')
       return
     }
-    if (step === 2 && Number(amountReceived) > totalAmount) {
-      setFormError('The amount received cannot be greater than the reservation total.')
-      return
+    if (step === 2 && initialPaymentAmount) {
+      const amount = Number(initialPaymentAmount)
+      if (!Number.isFinite(amount) || amount <= 0 || amount > totalAmount) {
+        setFormError(`Enter an initial payment greater than zero and no more than the estimated total of ${formatAmount(totalAmount, currency)}.`)
+        return
+      }
     }
     if (step < 2) {
       setFormError('')
@@ -136,25 +220,38 @@ function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
       return
     }
 
-    onCreate({
-      reference: `OPZY-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`,
-      guest: guestName.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
-      tier: '',
-      room,
-      assignedRoomId,
-      registeredAt: new Date().toISOString().slice(0, 10),
-      checkIn,
-      checkOut,
-      adults: Number(adults),
-      children: Number(children),
-      amount: totalAmount,
-      paidAmount,
-      nightlyRate,
-      payment,
-      folio: payment === 'Pending' ? 'Pending Payment' : 'Confirmed',
-    })
+    if (!roomTypeId) {
+      setFormError('The selected sanctuary is missing its room type ID. Refresh room inventory and try again.')
+      return
+    }
+
+    setSaving(true)
+    setFormError('')
+    try {
+      const initialPayment = initialPaymentAmount
+        ? {
+          amountMinor: Math.round(Number(initialPaymentAmount) * minorUnitScale),
+          method: initialPaymentMethod,
+          idempotencyKey: initialPaymentIdempotencyKey,
+        }
+        : undefined
+      await onCreate({
+        checkIn,
+        checkOut,
+        roomTypeId,
+        ...(assignedRoomId ? { assignedRoomId } : {}),
+        guestName: guestName.trim(),
+        guestEmail: email.trim(),
+        guestPhone: phone.trim(),
+        adults: Number(adults),
+        children: Number(children),
+      }, initialPayment)
+      onClose()
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Could not create the reservation.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const fieldClass = 'mt-1.5 w-full rounded-sm border border-stone-200 bg-white px-3 py-2.5 text-xs text-ink outline-none transition focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
@@ -195,55 +292,72 @@ function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
           <div className="flex-1 space-y-4 overflow-y-auto p-5">
             {step === 0 && (
               <>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-[10px] font-semibold tracking-wide text-ink">CHECK-IN DATE <span className="text-rose-600">*</span>
+                    <input className={fieldClass} type="date" value={checkIn} min={today.toISOString().slice(0, 10)} onChange={(event) => { setCheckIn(event.target.value); setAssignedRoomId(''); setFormError('') }} required />
+                  </label>
+                  <label className="text-[10px] font-semibold tracking-wide text-ink">CHECK-OUT DATE <span className="text-rose-600">*</span>
+                    <input className={fieldClass} type="date" value={checkOut} min={checkIn || today.toISOString().slice(0, 10)} onChange={(event) => { setCheckOut(event.target.value); setAssignedRoomId(''); setFormError('') }} required />
+                  </label>
+                  <label className="text-[10px] font-semibold tracking-wide text-ink">ADULTS
+                    <input className={fieldClass} type="number" min="1" max="10" value={adults} onChange={(event) => { setAdults(event.target.value); setAssignedRoomId('') }} required />
+                  </label>
+                  <label className="text-[10px] font-semibold tracking-wide text-ink">CHILDREN
+                    <input className={fieldClass} type="number" min="0" max="10" value={children} onChange={(event) => { setChildren(event.target.value); setAssignedRoomId('') }} />
+                  </label>
+                </div>
                 <label className="block text-[10px] font-semibold tracking-wide text-ink">
-                  SELECT SANCTUARY / SUITE <span className="text-rose-600">*</span>
+                  ROOM CATEGORY <span className="text-rose-600">*</span>
                   <span className="relative block">
-                    <select className={fieldClass} value={room} onChange={(event) => { setRoom(event.target.value); setAssignedRoomId(''); setFormError('') }} required>
-                      {roomOptions.map((option) => <option key={option}>{option}</option>)}
+                    <select className={fieldClass} value={selectedRoomType?.id ?? ''} disabled={roomLoading || activeRoomTypes.length === 0} onChange={(event) => { setSelectedRoomTypeId(event.target.value); setAssignedRoomId(''); setFormError('') }} required>
+                      {roomLoading && <option value="">Loading room categories…</option>}
+                      {!roomLoading && activeRoomTypes.length === 0 && <option value="">No active room categories</option>}
+                      {activeRoomTypes.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
                     </select>
                     <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" />
                   </span>
                 </label>
                 <label className="block text-[10px] font-semibold tracking-wide text-ink">
-                  ASSIGN ROOM <span className="text-rose-600">*</span>
+                  ROOM <span className="text-rose-600">*</span>
                   <span className="relative block">
-                    <select className={fieldClass} value={assignedRoomId} onChange={(event) => { setAssignedRoomId(event.target.value); setFormError('') }} required>
-                      <option value="">Select an available room</option>
-                      {availableRooms.map((availableRoom) => <option key={availableRoom.id} value={availableRoom.id}>{availableRoom.name} · Floor {availableRoom.floor}</option>)}
+                    <select className={fieldClass} value={assignedRoomId} disabled={roomLoading || availabilityLoading || !hasValidStay || Boolean(availabilityError) || availableRooms.length === 0} onChange={(event) => { setAssignedRoomId(event.target.value); setFormError('') }} required>
+                      <option value="">
+                        {roomLoading ? 'Loading rooms…'
+                          : !hasValidStay ? 'Choose dates to check availability'
+                            : availabilityLoading ? 'Checking availability…'
+                              : availabilityError ? 'Availability could not be checked'
+                                : availableRooms.length ? 'Select an available room' : 'No rooms available for these dates'}
+                      </option>
+                      {availableRooms.map((room) => (
+                        <option key={room.id} value={room.id}>
+                          {inventory.find((item) => item.id === room.id)?.name ?? room.code}
+                        </option>
+                      ))}
                     </select>
                     <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" />
                   </span>
                   <span className="mt-1 block text-[9px] font-normal normal-case tracking-normal text-muted">
-                    {availableRooms.length ? `${availableRooms.length} available for these dates` : 'No rooms available for this type and date range.'}
+                    {roomError || availabilityError || (availabilityLoading
+                      ? 'Checking the database for rooms available for these dates…'
+                      : availability
+                        ? `${availableRooms.length} room${availableRooms.length === 1 ? '' : 's'} available for these dates. The server checks availability again when you save.`
+                        : 'Choose the stay dates and guest count to check database availability.')}
                   </span>
                 </label>
-                {selectedRoom && checkIn && checkOut > checkIn && (
+                {(roomError || availabilityError) && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">{roomError || availabilityError}</p>}
+                {selectedRoom && availability && (
                   <section className="space-y-2 border border-stone-200 bg-white p-3">
                     <h3 className="text-[10px] font-semibold tracking-wide text-ink">ROOM PRICE</h3>
                     <div className="flex justify-between gap-3 text-[11px]">
                       <span className="text-muted">Nightly rate</span>
-                      <strong className="text-ink">{reservationCurrency.format(selectedRoom.rate)} / night</strong>
+                      <strong className="text-ink">{formatAmount(nightlyRate, currency)} / night</strong>
                     </div>
                     <div className="flex justify-between gap-3 border-t border-stone-100 pt-2 text-[11px]">
-                      <span className="text-muted">Total stay · {nights} {nights === 1 ? 'night' : 'nights'}</span>
-                      <strong className="text-ink">{reservationCurrency.format(selectedRoom.rate * nights)}</strong>
+                      <span className="text-muted">Estimated total · {nights} {nights === 1 ? 'night' : 'nights'}</span>
+                      <strong className="text-ink">{formatAmount(totalAmount, currency)}</strong>
                     </div>
                   </section>
                 )}
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="text-[10px] font-semibold tracking-wide text-ink">CHECK-IN DATE <span className="text-rose-600">*</span>
-                    <input className={fieldClass} type="date" value={checkIn} min={today.toISOString().slice(0, 10)} onChange={(event) => { setCheckIn(event.target.value); setFormError('') }} required />
-                  </label>
-                  <label className="text-[10px] font-semibold tracking-wide text-ink">CHECK-OUT DATE <span className="text-rose-600">*</span>
-                    <input className={fieldClass} type="date" value={checkOut} min={checkIn || today.toISOString().slice(0, 10)} onChange={(event) => { setCheckOut(event.target.value); setFormError('') }} required />
-                  </label>
-                  <label className="text-[10px] font-semibold tracking-wide text-ink">ADULTS
-                    <input className={fieldClass} type="number" min="1" max="10" value={adults} onChange={(event) => setAdults(event.target.value)} required />
-                  </label>
-                  <label className="text-[10px] font-semibold tracking-wide text-ink">CHILDREN
-                    <input className={fieldClass} type="number" min="0" max="10" value={children} onChange={(event) => setChildren(event.target.value)} />
-                  </label>
-                </div>
               </>
             )}
 
@@ -272,23 +386,37 @@ function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
                   <p className="mt-1 text-[10px] leading-5 text-muted">Review the stay and guest details before creating this reservation.</p>
                 </div>
                 <dl className="divide-y divide-stone-200 rounded-sm border border-stone-200 bg-white px-4">
-                  <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Sanctuary</dt><dd className="text-right font-medium text-ink">{room}</dd></div>
-                  <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Assigned room</dt><dd className="text-right font-medium text-ink">{selectedRoom?.name ?? roomDisplayName(assignedRoomId, inventory)}</dd></div>
+                  <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Sanctuary</dt><dd className="text-right font-medium text-ink">{selectedRoomType?.name ?? 'No category selected'}</dd></div>
+                  <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Assigned room</dt><dd className="text-right font-medium text-ink">{selectedRoomInventory?.name ?? selectedRoom?.code ?? roomDisplayName(assignedRoomId, inventory)}</dd></div>
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Stay dates</dt><dd className="text-right font-medium text-ink">{shortDate(checkIn)} – {shortDate(checkOut)} · {nights} {nights === 1 ? 'night' : 'nights'}</dd></div>
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Party</dt><dd className="text-right font-medium text-ink">{adults} adults, {children} children</dd></div>
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Primary guest</dt><dd className="text-right font-medium text-ink">{guestName}</dd></div>
                   <div className="flex justify-between gap-4 py-3 text-xs"><dt className="text-muted">Email / telephone</dt><dd className="text-right font-medium text-ink">{email}<br />{phone}</dd></div>
                 </dl>
                 <section className="space-y-2 rounded-sm border border-stone-200 bg-white p-3">
-                  <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT RECEIVED</h3>
-                  <label className="block text-[10px] text-muted">
-                    Amount received (₦)
-                    <input className={fieldClass} type="number" min="0" max={totalAmount} step="1" value={amountReceived} aria-invalid={Number(amountReceived) > totalAmount} onChange={(event) => { setAmountReceived(event.target.value); setFormError('') }} />
-                    {Number(amountReceived) > totalAmount && <span className="mt-1 block text-[10px] font-medium text-rose-700">Amount received cannot exceed the reservation total.</span>}
-                  </label>
-                  <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Total amount</span><strong className="text-ink">{reservationCurrency.format(totalAmount)}</strong></div>
-                  <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Balance due</span><strong className={`font-bold ${balanceDue ? 'text-amber-900' : 'text-emerald-800'}`}>{reservationCurrency.format(balanceDue)}</strong></div>
-                  <p className="text-[9px] text-muted">Payment status: <strong className="text-ink">{payment}</strong></p>
+                  <h3 className="text-[10px] font-semibold tracking-wide text-ink">ESTIMATED PRICE</h3>
+                  <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Estimated total</span><strong className="text-ink">{formatAmount(totalAmount, currency)}</strong></div>
+                  <p className="text-[9px] text-muted">The server confirms availability and calculates the saved reservation price.</p>
+                </section>
+                <section className="space-y-3 rounded-sm border border-stone-200 bg-white p-3">
+                  <div>
+                    <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT · OPTIONAL</h3>
+                    <p className="mt-1 text-[9px] text-muted">Record a full or partial payment now, or leave the amount blank to collect it later.</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="text-[10px] font-semibold tracking-wide text-ink">AMOUNT RECEIVED
+                      <input className={fieldClass} type="number" min="0" max={totalAmount} step={1 / minorUnitScale} value={initialPaymentAmount} onChange={(event) => { setInitialPaymentAmount(event.target.value); setInitialPaymentIdempotencyKey(createPaymentIdempotencyKey()); setFormError('') }} placeholder="0" />
+                    </label>
+                    <label className="text-[10px] font-semibold tracking-wide text-ink">METHOD
+                      <select className={fieldClass} value={initialPaymentMethod} onChange={(event) => { setInitialPaymentMethod(event.target.value as PaymentMethod); setInitialPaymentIdempotencyKey(createPaymentIdempotencyKey()) }}>
+                        {paymentMethods.map((method) => <option key={method.value} value={method.value}>{method.label}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="flex justify-between gap-3 border-t border-stone-100 pt-2 text-[11px]">
+                    <span className="text-muted">Estimated balance due</span>
+                    <strong className="text-amber-900">{formatAmount(Math.max(0, totalAmount - (Number(initialPaymentAmount) || 0)), currency)}</strong>
+                  </div>
                 </section>
               </>
             )}
@@ -299,8 +427,8 @@ function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
             {step > 0
               ? <button type="button" onClick={() => setStep((current) => current - 1)} className="inline-flex items-center gap-1.5 rounded-sm px-3 py-2 text-[10px] font-semibold text-muted hover:bg-stone-100"><ArrowLeft aria-hidden="true" className="size-3.5" /> Back</button>
               : <button type="button" onClick={onClose} className="rounded-sm px-3 py-2 text-[10px] font-semibold text-muted hover:bg-stone-100">Cancel</button>}
-            <button type="submit" className="inline-flex items-center gap-2 rounded-sm bg-amber-800 px-4 py-2.5 text-[10px] font-semibold tracking-wide text-white transition-colors hover:bg-amber-900">
-              {step === 2 ? 'CREATE RESERVATION' : 'CONTINUE'} <ArrowRight aria-hidden="true" className="size-3.5" />
+            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 rounded-sm bg-amber-800 px-4 py-2.5 text-[10px] font-semibold tracking-wide text-white transition-colors hover:bg-amber-900 disabled:cursor-wait disabled:opacity-60">
+              {saving ? 'SAVING…' : step === 2 ? 'CREATE RESERVATION' : 'CONTINUE'} {!saving && <ArrowRight aria-hidden="true" className="size-3.5" />}
             </button>
           </footer>
         </form>
@@ -309,7 +437,82 @@ function ReservationDialog({ onClose, onCreate, reservations, inventory }: {
   )
 }
 
-function ReservationDetails({ reservation, inventory, onClose }: { reservation: Reservation; inventory: Room[]; onClose: () => void }) {
+function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecordPayment, pendingPayment }: {
+  reservation: Reservation
+  inventory: Room[]
+  hotelId: string
+  onClose: () => void
+  onRecordPayment: (payment: ReservationPayment) => Promise<void>
+  pendingPayment?: ReservationPayment
+}) {
+  const currency = reservation.currency ?? 'NGN'
+  const minorUnitScale = currencyMinorUnitScale(currency)
+  const [paymentAmount, setPaymentAmount] = useState(pendingPayment ? String(pendingPayment.amountMinor / minorUnitScale) : '')
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(pendingPayment?.method ?? 'cash')
+  const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(pendingPayment?.idempotencyKey ?? createPaymentIdempotencyKey)
+  const [paymentError, setPaymentError] = useState('')
+  const [savingPayment, setSavingPayment] = useState(false)
+  const [paymentHistoryReload, setPaymentHistoryReload] = useState(0)
+  const [paymentHistoryState, setPaymentHistoryState] = useState<{
+    queryKey: string
+    payments?: ReservationPaymentRecord[]
+    error?: string
+  }>({ queryKey: '' })
+  const paymentHistoryQueryKey = [hotelId, reservation.id ?? '', paymentHistoryReload].join('|')
+  const hasCurrentPaymentHistory = paymentHistoryState.queryKey === paymentHistoryQueryKey
+  const paymentHistory = hasCurrentPaymentHistory ? paymentHistoryState.payments : undefined
+  const paymentHistoryLoading = Boolean(reservation.id && hotelId && !hasCurrentPaymentHistory)
+  const paymentHistoryError = hasCurrentPaymentHistory
+    ? paymentHistoryState.error ?? ''
+    : !reservation.id ? 'This reservation has no database ID.' : !hotelId ? 'Select a hotel to load its payment history.' : ''
+
+  useEffect(() => {
+    if (!reservation.id || !hotelId) return
+
+    let cancelled = false
+    void fetchReservationPayments(hotelId, reservation.id)
+      .then((payments) => {
+        if (!cancelled) setPaymentHistoryState({ queryKey: paymentHistoryQueryKey, payments })
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setPaymentHistoryState({
+            queryKey: paymentHistoryQueryKey,
+            error: error instanceof Error ? error.message : 'Could not load payment history.',
+          })
+        }
+      })
+
+    return () => { cancelled = true }
+  }, [hotelId, paymentHistoryQueryKey, reservation.id])
+  const balance = reservationBalanceDue(reservation)
+
+  async function submitPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const amount = Number(paymentAmount)
+    if (!Number.isFinite(amount) || amount <= 0 || amount > balance) {
+      setPaymentError(`Enter an amount greater than zero and no more than the remaining balance of ${formatAmount(balance, currency)}.`)
+      return
+    }
+
+    setSavingPayment(true)
+    setPaymentError('')
+    try {
+      await onRecordPayment({
+        amountMinor: Math.round(amount * minorUnitScale),
+        method: paymentMethod,
+        idempotencyKey: paymentIdempotencyKey,
+      })
+      setPaymentAmount('')
+      setPaymentIdempotencyKey(createPaymentIdempotencyKey())
+      setPaymentHistoryReload((current) => current + 1)
+    } catch (error) {
+      setPaymentError(error instanceof Error ? error.message : 'Could not record this payment.')
+    } finally {
+      setSavingPayment(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onMouseDown={onClose}>
       <section role="dialog" aria-modal="true" aria-labelledby="reservation-details-title" className="w-full max-w-lg rounded-sm bg-white p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
@@ -324,24 +527,69 @@ function ReservationDetails({ reservation, inventory, onClose }: { reservation: 
         <dl className="mt-4 grid grid-cols-1 gap-x-5 divide-y divide-stone-100 border-y border-stone-100 sm:grid-cols-2 sm:divide-y-0">
           <div className="py-3"><dt className="text-[10px] text-muted">Email</dt><dd className="mt-1 break-all text-xs text-ink">{reservation.email}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Telephone</dt><dd className="mt-1 text-xs text-ink">{reservation.phone}</dd></div>
-          <div className="py-3"><dt className="text-[10px] text-muted">Sanctuary / assigned room</dt><dd className="mt-1 text-xs text-ink">{reservation.room} · {roomDisplayName(reservation.assignedRoomId, inventory)}</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Sanctuary / assigned room</dt><dd className="mt-1 text-xs text-ink">{reservation.room} · {roomDisplayName(reservation.assignedRoomId, inventory, reservation.assignedRoomName)}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Stay dates</dt><dd className="mt-1 text-xs text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</dd></div>
           <div className="py-3"><dt className="text-[10px] text-muted">Party</dt><dd className="mt-1 text-xs text-ink">{reservation.adults} adults, {reservation.children} children</dd></div>
-          <div className="py-3"><dt className="text-[10px] text-muted">Room rate per night</dt><dd className="mt-1 text-xs text-ink">{reservationCurrency.format(reservation.nightlyRate ?? Math.round(reservation.amount / nightsBetween(reservation.checkIn, reservation.checkOut)))} / night</dd></div>
-          <div className="py-3"><dt className="text-[10px] text-muted">Total stay · {nightsBetween(reservation.checkIn, reservation.checkOut)} {nightsBetween(reservation.checkIn, reservation.checkOut) === 1 ? 'night' : 'nights'}</dt><dd className="mt-1 text-xs font-semibold text-ink">{reservationCurrency.format(reservation.amount)}</dd></div>
-          <div className="py-3"><dt className="text-[10px] text-muted">Amount paid</dt><dd className="mt-1 text-xs text-emerald-800">{reservationCurrency.format(reservationPaidAmount(reservation))}</dd></div>
-          <div className="py-3"><dt className="text-[10px] text-muted">Remaining balance</dt><dd className={`mt-1 text-xs font-bold ${reservationBalanceDue(reservation) ? 'text-amber-900' : 'text-ink'}`}>{reservationCurrency.format(reservationBalanceDue(reservation))}</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Room rate per night</dt><dd className="mt-1 text-xs text-ink">{formatAmount(reservation.nightlyRate ?? Math.round(reservation.amount / nightsBetween(reservation.checkIn, reservation.checkOut)), reservation.currency)} / night</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Total stay · {nightsBetween(reservation.checkIn, reservation.checkOut)} {nightsBetween(reservation.checkIn, reservation.checkOut) === 1 ? 'night' : 'nights'}</dt><dd className="mt-1 text-xs font-semibold text-ink">{formatAmount(reservation.amount, reservation.currency)}</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Amount paid</dt><dd className="mt-1 text-xs text-emerald-800">{formatAmount(reservationPaidAmount(reservation), reservation.currency)}</dd></div>
+          <div className="py-3"><dt className="text-[10px] text-muted">Remaining balance</dt><dd className={`mt-1 text-xs font-bold ${reservationBalanceDue(reservation) ? 'text-amber-900' : 'text-ink'}`}>{formatAmount(reservationBalanceDue(reservation), reservation.currency)}</dd></div>
           <div className="py-3 sm:col-span-2"><dt className="text-[10px] text-muted">Payment / folio</dt><dd className="mt-1 text-xs text-ink">{reservation.payment} / {reservation.folio}</dd></div>
         </dl>
+        <section className="mt-4 border border-stone-200 bg-white p-3">
+          <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT HISTORY</h3>
+          {paymentHistoryLoading && <p className="mt-2 text-[10px] text-muted">Loading payment history…</p>}
+          {paymentHistoryError && <p role="alert" className="mt-2 text-[10px] text-rose-800">{paymentHistoryError}</p>}
+          {!paymentHistoryLoading && !paymentHistoryError && paymentHistory?.length === 0 && (
+            <p className="mt-2 text-[10px] text-muted">No payments have been recorded.</p>
+          )}
+          {paymentHistory && paymentHistory.length > 0 && (
+            <ul className="mt-2 divide-y divide-stone-100">
+              {paymentHistory.map((payment) => (
+                <li key={payment.id} className="flex items-start justify-between gap-3 py-2 text-[10px]">
+                  <div>
+                    <strong className="block font-semibold text-ink">{paymentMethodLabel(payment.method)}</strong>
+                    <span className="mt-0.5 block text-muted">{formatPaymentDate(payment.receivedAt)}{payment.note ? ` · ${payment.note}` : ''}</span>
+                  </div>
+                  <strong className="whitespace-nowrap text-emerald-800">{formatAmount(payment.amount, payment.currency)}</strong>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+        {balance > 0 && reservation.folio !== 'Cancelled' && reservation.folio !== 'No Show' && reservation.payment !== 'Refunded' && (
+          <form onSubmit={submitPayment} className="mt-4 space-y-3 border border-stone-200 bg-paper p-3">
+            <div>
+              <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT</h3>
+              <p className="mt-1 text-[9px] text-muted">Record another full or partial payment against this reservation.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-[10px] font-semibold tracking-wide text-ink">AMOUNT RECEIVED
+                <input className="mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-xs text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10" type="number" min="0" max={balance} step={1 / minorUnitScale} value={paymentAmount} onChange={(event) => { setPaymentAmount(event.target.value); setPaymentIdempotencyKey(createPaymentIdempotencyKey()); setPaymentError('') }} required />
+              </label>
+              <label className="text-[10px] font-semibold tracking-wide text-ink">METHOD
+                <select className="mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-xs text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10" value={paymentMethod} onChange={(event) => { setPaymentMethod(event.target.value as PaymentMethod); setPaymentIdempotencyKey(createPaymentIdempotencyKey()) }}>
+                  {paymentMethods.map((method) => <option key={method.value} value={method.value}>{method.label}</option>)}
+                </select>
+              </label>
+            </div>
+            <p className="text-[10px] text-muted">Balance after payment: <strong className="text-amber-900">{formatAmount(Math.max(0, balance - (Number(paymentAmount) || 0)), currency)}</strong></p>
+            {paymentError && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">{paymentError}</p>}
+            <div className="flex justify-end">
+              <button type="submit" disabled={savingPayment} className="bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-60">{savingPayment ? 'SAVING…' : 'RECORD PAYMENT'}</button>
+            </div>
+          </form>
+        )}
       </section>
     </div>
   )
 }
 
-function CancelReservationDialog({ reservation, onClose, onConfirm }: {
+function CancelReservationDialog({ reservation, onClose, onConfirm, saving }: {
   reservation: Reservation
   onClose: () => void
   onConfirm: () => void
+  saving: boolean
 }) {
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" onMouseDown={onClose}>
@@ -350,8 +598,8 @@ function CancelReservationDialog({ reservation, onClose, onConfirm }: {
         <h2 id="cancel-reservation-title" className="mt-3 font-display text-xl text-ink">Cancel reservation?</h2>
         <p className="mt-2 text-xs leading-5 text-muted">Cancel {reservation.guest}&apos;s reservation for {shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}. The room will be released if no other active folio uses it. Any refund should be recorded separately.</p>
         <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="border border-stone-300 px-3 py-2 text-[10px] font-semibold text-ink hover:bg-stone-50">Keep Reservation</button>
-          <button type="button" onClick={onConfirm} className="bg-rose-700 px-3 py-2 text-[10px] font-semibold text-white hover:bg-rose-800">Cancel Reservation</button>
+          <button type="button" onClick={onClose} disabled={saving} className="border border-stone-300 px-3 py-2 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-60">Keep Reservation</button>
+          <button type="button" onClick={onConfirm} disabled={saving} className="bg-rose-700 px-3 py-2 text-[10px] font-semibold text-white hover:bg-rose-800 disabled:cursor-wait disabled:opacity-60">{saving ? 'Cancelling…' : 'Cancel Reservation'}</button>
         </div>
       </section>
     </div>
@@ -359,8 +607,17 @@ function CancelReservationDialog({ reservation, onClose, onConfirm }: {
 }
 
 export function AdminReservations() {
-  const { reservations: rows, setReservations, rooms } = useAdminReservations()
+  const { rooms, roomTypes, roomLoading, roomError } = useAdminReservations()
+  const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
+  const [rows, setRows] = useState<Reservation[]>([])
+  const [pagination, setPagination] = useState({ page: 1, limit: rowsPerPage, total: 0, pages: 0 })
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+  const [cancelling, setCancelling] = useState(false)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [folioFilter, setFolioFilter] = useState('All folio statuses')
   const [paymentFilter, setPaymentFilter] = useState('All payment statuses')
   const [dateFilter, setDateFilter] = useState('Any check-in date')
@@ -368,27 +625,71 @@ export function AdminReservations() {
   const [createOpen, setCreateOpen] = useState(false)
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null)
   const [reservationToCancel, setReservationToCancel] = useState<Reservation | null>(null)
-  const rowsPerPage = 5
+  const [pendingPayments, setPendingPayments] = useState<Record<string, ReservationPayment>>({})
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250)
+    return () => window.clearTimeout(timer)
+  }, [search])
+
+  useEffect(() => {
+    if (!hotelId) {
+      setLoading(false)
+      setLoadError('Select a hotel to load its reservations.')
+      return
+    }
+
+    let cancelled = false
+    setLoading(true)
+    setLoadError('')
+    setRows([])
+    const dateRange: { checkInFrom?: string; checkInTo?: string } = dateFilter === 'Any check-in date' ? {} : checkInDateRange(dateFilter)
+    const upcoming = folioFilter === 'Upcoming'
+    if (upcoming) {
+      const tomorrow = new Date(today)
+      tomorrow.setDate(tomorrow.getDate() + 1)
+      const tomorrowKey = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`
+      dateRange.checkInFrom = dateRange.checkInFrom && dateRange.checkInFrom > tomorrowKey
+        ? dateRange.checkInFrom
+        : tomorrowKey
+    }
+    void fetchReservations(hotelId, {
+      page,
+      limit: rowsPerPage,
+      search: debouncedSearch || undefined,
+      status: upcoming || folioFilter === 'Pending Payment' ? 'confirmed' : reservationStatusFilter(folioFilter),
+      ...dateRange,
+    })
+      .then((result) => {
+        if (cancelled) return
+        setRows(result.reservations)
+        setPagination(result.pagination)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setLoadError(error instanceof Error ? error.message : 'Could not load reservations.')
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+
+    return () => { cancelled = true }
+  }, [dateFilter, debouncedSearch, folioFilter, hotelId, page, reloadKey])
 
   const filteredRows = useMemo(() => {
-    const query = search.trim().toLowerCase()
     return rows.filter((reservation) => {
-      const matchesQuery = !query || [reservation.reference, reservation.guest, reservation.email, reservation.room]
-        .some((value) => value.toLowerCase().includes(query))
       const matchesFolio = folioFilter === 'All folio statuses'
-        || (folioFilter === 'Upcoming' ? isUpcomingReservation(reservation) : reservation.folio === folioFilter)
+        || (folioFilter === 'Upcoming'
+          ? isUpcomingReservation(reservation)
+          : folioFilter === 'Pending Payment'
+            ? reservation.payment === 'Pending' && reservation.folio !== 'Cancelled'
+            : reservation.folio === folioFilter)
       const matchesPayment = paymentFilter === 'All payment statuses' || reservation.payment === paymentFilter
-      const date = new Date(`${reservation.checkIn}T12:00:00`)
-      const matchesDate = dateFilter === 'Any check-in date'
-        || (dateFilter === 'This month' && date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear())
-        || (dateFilter === 'Next month' && date.getMonth() === (today.getMonth() + 1) % 12 && date.getFullYear() === today.getFullYear() + (today.getMonth() === 11 ? 1 : 0))
-      return matchesQuery && matchesFolio && matchesPayment && matchesDate
+      return matchesFolio && matchesPayment
     })
-  }, [dateFilter, folioFilter, paymentFilter, rows, search])
+  }, [folioFilter, paymentFilter, rows])
 
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / rowsPerPage))
+  const totalPages = Math.max(1, pagination.pages)
   const currentPage = Math.min(page, totalPages)
-  const visibleRows = filteredRows.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
+  const visibleRows = filteredRows
   const upcomingCount = rows.filter(isUpcomingReservation).length
   const pendingReservations = rows.filter((row) => row.payment === 'Pending' || row.payment === 'Partially Paid')
   const cancelledCount = rows.filter((row) => row.folio === 'Cancelled').length
@@ -403,21 +704,95 @@ export function AdminReservations() {
     setPage(1)
   }
 
-  function createReservation(reservation: Reservation) {
-    setReservations((current) => [reservation, ...current])
+  async function createReservation(draft: ReservationDraft, initialPayment?: ReservationPayment) {
+    if (!hotelId) throw new Error('Select a hotel before creating a reservation.')
+    setActionError('')
+    let reservation = await createReservationRequest(hotelId, draft)
+    setRows((current) => page === 1 ? [reservation, ...current].slice(0, rowsPerPage) : current)
+    setPagination((current) => ({ ...current, total: current.total + 1 }))
     setPage(1)
     setSearch('')
-    setCreateOpen(false)
+    setDebouncedSearch('')
+    setFolioFilter('All folio statuses')
+    setPaymentFilter('All payment statuses')
+    setDateFilter('Any check-in date')
+
+    if (initialPayment) {
+      if (!reservation.id) {
+        setActionError('The reservation was created, but its database ID is missing, so the initial payment could not be recorded.')
+        return reservation
+      }
+
+      try {
+        const paymentSummary = await recordReservationPayment(hotelId, reservation.id, initialPayment, reservation.currency ?? 'NGN')
+        reservation = {
+          ...reservation,
+          paidAmount: paymentSummary.paidAmount,
+          balanceDue: paymentSummary.balanceDue,
+          payment: paymentSummary.balanceDue === 0
+            ? 'Paid'
+            : paymentSummary.paidAmount > 0
+              ? 'Partially Paid'
+              : 'Pending',
+        }
+        setRows((current) => current.map((row) => row.id === reservation.id ? reservation : row))
+      } catch (error) {
+        setPendingPayments((current) => ({ ...current, [reservation.id!]: initialPayment }))
+        const reason = error instanceof Error ? error.message : 'The payment could not be recorded.'
+        setActionError(`Reservation ${reservation.reference} was created, but the initial payment could not be recorded: ${reason}`)
+      }
+    }
+
+    return reservation
   }
 
-  function cancelReservation() {
+  async function recordPayment(reservation: Reservation, payment: ReservationPayment) {
+    if (!reservation.id) throw new Error('This reservation is missing its database ID and cannot accept a payment.')
+    if (!hotelId) throw new Error('Select a hotel before recording a payment.')
+
+    const paymentSummary = await recordReservationPayment(hotelId, reservation.id, payment, reservation.currency ?? 'NGN')
+    const updated: Reservation = {
+      ...reservation,
+      paidAmount: paymentSummary.paidAmount,
+      balanceDue: paymentSummary.balanceDue,
+      payment: paymentSummary.balanceDue === 0
+        ? 'Paid'
+        : paymentSummary.paidAmount > 0
+          ? 'Partially Paid'
+          : 'Pending',
+    }
+    setRows((current) => current.map((row) => row.id === updated.id ? updated : row))
+    setPendingPayments((current) => {
+      const next = { ...current }
+      delete next[updated.id!]
+      return next
+    })
+    setSelectedReservation(updated)
+  }
+
+  async function cancelReservation() {
     if (!reservationToCancel) return
-    const cancelled = reservationToCancel
-    setReservations((current) => current.map((reservation) => reservation.reference === cancelled.reference
-      ? { ...reservation, folio: 'Cancelled' }
-      : reservation))
-    setSelectedReservation(null)
-    setReservationToCancel(null)
+    if (!reservationToCancel.id) {
+      setActionError('This reservation is missing its database ID and cannot be cancelled.')
+      return
+    }
+    if (!hotelId) {
+      setActionError('Select a hotel before updating a reservation.')
+      return
+    }
+    setActionError('')
+    setCancelling(true)
+    try {
+      const updated = await updateReservationStatus(hotelId, reservationToCancel.id, 'cancelled')
+      setRows((current) => current.map((reservation) => reservation.id === updated.id ? updated : reservation))
+      setReloadKey((current) => current + 1)
+      setSelectedReservation(null)
+      setReservationToCancel(null)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not cancel the reservation.')
+    } finally {
+      setCancelling(false)
+    }
   }
 
   const selectClass = 'w-full appearance-none rounded-sm border border-stone-200 bg-white py-2.5 pl-3 pr-8 text-[10px] text-ink outline-none focus:border-amber-800'
@@ -444,27 +819,29 @@ export function AdminReservations() {
         <span className="inline-flex items-center gap-2 self-start rounded-sm border border-stone-200 bg-white px-3 py-2 text-[10px] text-muted lg:self-auto"><i className="size-1.5 rounded-full bg-emerald-500" /> <strong className="text-ink">84.6%</strong> Occupancy</span>
       </header>
 
+      {(loadError || actionError) && <p role="alert" className="mb-4 border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-800">{loadError || actionError}</p>}
+
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
           <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">TOTAL RESERVATIONS</span>
           <CalendarDays aria-hidden="true" className="absolute right-4 top-4 size-8 rounded-sm bg-paper p-2 text-muted" />
-          <strong className="mt-2 block font-display text-2xl text-ink">{rows.length}</strong>
+          <strong className="mt-2 block font-display text-2xl text-ink">{pagination.total}</strong>
           <p className="mt-1 text-[10px] text-muted">Reservations currently available</p>
         </article>
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
-          <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">CONFIRMED</span>
+          <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">UPCOMING ON PAGE</span>
           <CircleCheck aria-hidden="true" className="absolute right-4 top-4 size-8 rounded-sm bg-emerald-50 p-2 text-emerald-700" />
           <strong className="mt-2 block font-display text-2xl text-ink">{upcomingCount}</strong>
-          <p className="mt-1 text-[10px] text-muted">Confirmed stays with future check-in dates</p>
+          <p className="mt-1 text-[10px] text-muted">Confirmed stays on this page</p>
         </article>
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
-          <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">PENDING PAYMENT</span>
+          <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">PENDING ON PAGE</span>
           <CircleAlert aria-hidden="true" className="absolute right-4 top-4 size-8 rounded-sm bg-amber-50 p-2 text-amber-700" />
           <strong className="mt-2 block font-display text-2xl text-ink">{pendingReservations.length}</strong>
-          <p className="mt-1 text-[10px] text-muted"><b className="font-semibold text-amber-800">{reservationCurrency.format(pendingAmount)}</b> outstanding balance</p>
+          <p className="mt-1 text-[10px] text-muted"><b className="font-semibold text-amber-800">{formatAmount(pendingAmount)}</b> outstanding on this page</p>
         </article>
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
-          <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">CANCELLED</span>
+          <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">CANCELLED ON PAGE</span>
           <CircleX aria-hidden="true" className="absolute right-4 top-4 size-8 rounded-sm bg-rose-50 p-2 text-rose-700" />
           <strong className="mt-2 block font-display text-2xl text-ink">{cancelledCount} <small className="font-body text-xs text-rose-700">{cancelledPercentage}%</small></strong>
           <p className="mt-1 text-[10px] text-muted">{checkedInCount} guests currently checked in</p>
@@ -486,7 +863,7 @@ export function AdminReservations() {
             <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 size-3 -translate-y-1/2 text-muted" />
           </label>
           <label className="relative">
-            <span className="sr-only">Filter by payment status</span>
+            <span className="sr-only">Filter payment status on this page</span>
             <select className={selectClass} value={paymentFilter} onChange={(event) => { setPaymentFilter(event.target.value); setPage(1) }}>
               <option>All payment statuses</option>{paymentOptions.map((status) => <option key={status}>{status}</option>)}
             </select>
@@ -522,14 +899,15 @@ export function AdminReservations() {
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
-              {visibleRows.map((reservation) => (
-                <tr key={reservation.reference} className="align-top text-muted hover:bg-paper/60">
-                  <td className="px-3 py-3"><strong className="block whitespace-nowrap text-[11px] text-ink">{reservation.reference}</strong><small className="mt-1 block text-[10px]">Direct · Web channel</small></td>
+              {loading && <tr><td className="px-4 py-10 text-center text-xs text-muted" colSpan={9}>Loading reservations…</td></tr>}
+              {!loading && visibleRows.map((reservation) => (
+                <tr key={reservation.id ?? reservation.reference} className="align-top text-muted hover:bg-paper/60">
+                  <td className="px-3 py-3"><strong className="block whitespace-nowrap text-[11px] text-ink">{reservation.reference}</strong><small className="mt-1 block text-[10px]">{reservation.source ?? 'Admin'}</small></td>
                   <td className="px-3 py-3"><strong className="block whitespace-nowrap font-medium text-ink">{reservation.guest}</strong><small className="mt-1 block text-[10px]">{reservation.email}</small>{reservation.tier && <span className="mt-1 inline-block rounded-sm bg-champagne/40 px-1.5 py-0.5 text-[9px] font-semibold text-amber-950">{reservation.tier}</span>}</td>
-                  <td className="px-3 py-3"><span className="block max-w-[145px] text-ink">{reservation.room}</span><small className="mt-1 block text-[10px]">{roomDisplayName(reservation.assignedRoomId, rooms)}</small></td>
+                  <td className="px-3 py-3"><span className="block max-w-[145px] text-ink">{reservation.room}</span><small className="mt-1 block text-[10px]">{roomDisplayName(reservation.assignedRoomId, rooms, reservation.assignedRoomName)}</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</strong>{isUpcomingReservation(reservation) && <span className="mt-1 block w-fit border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold text-sky-800">Upcoming</span>}<small className="mt-1 block text-[10px]">{nightsBetween(reservation.checkIn, reservation.checkOut)} nights</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="block font-medium text-ink">{reservation.adults} {reservation.adults === 1 ? 'Adult' : 'Adults'}</strong><small className="mt-1 block text-[10px]">{reservation.children} {reservation.children === 1 ? 'Child' : 'Children'}</small></td>
-                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{reservationCurrency.format(reservation.amount)}</strong><small className="mt-1 block text-[10px]">{reservation.payment === 'Pending' ? 'Awaiting payment' : reservation.payment === 'Partially Paid' ? `Paid ${reservationCurrency.format(reservationPaidAmount(reservation))} · Due ${reservationCurrency.format(reservationBalanceDue(reservation))}` : 'Settlement recorded'}</small></td>
+                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{formatAmount(reservation.amount, reservation.currency)}</strong><small className="mt-1 block text-[10px]">{reservation.payment === 'Pending' ? 'Awaiting payment' : reservation.payment === 'Partially Paid' ? `Paid ${formatAmount(reservationPaidAmount(reservation), reservation.currency)} · Due ${formatAmount(reservationBalanceDue(reservation), reservation.currency)}` : 'Settlement recorded'}</small></td>
                   <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-medium ${statusStyle(reservation.payment)}`}>{reservation.payment}</span></td>
                   <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-medium ${statusStyle(reservation.folio)}`}>{reservation.folio}</span></td>
                   <td className="px-3 py-3">
@@ -540,12 +918,12 @@ export function AdminReservations() {
                   </td>
                 </tr>
               ))}
-              {visibleRows.length === 0 && <tr><td className="px-4 py-10 text-center text-xs text-muted" colSpan={9}>No reservations match these filters. Try changing your search or clearing the filters.</td></tr>}
+              {!loading && visibleRows.length === 0 && <tr><td className="px-4 py-10 text-center text-xs text-muted" colSpan={9}>{loadError ? 'Reservations could not be loaded.' : 'No reservations match these filters. Try changing your search or clearing the filters.'}</td></tr>}
             </tbody>
           </table>
         </div>
         <div className="flex flex-col gap-3 border-t border-stone-100 px-4 py-3 text-[11px] text-muted sm:flex-row sm:items-center sm:justify-between">
-          <p>Showing <strong className="text-ink">{filteredRows.length ? (currentPage - 1) * rowsPerPage + 1 : 0}–{Math.min(currentPage * rowsPerPage, filteredRows.length)}</strong> of <strong className="text-ink">{filteredRows.length}</strong> reservations</p>
+          <p><strong className="text-ink">{visibleRows.length}</strong> matching reservations on page <strong className="text-ink">{currentPage}</strong> of <strong className="text-ink">{totalPages}</strong> · {pagination.total} total</p>
           <nav aria-label="Reservation pages" className="flex items-center gap-1">
             <button type="button" onClick={() => setPage(currentPage - 1)} disabled={currentPage === 1} aria-label="Previous page" className="grid size-7 place-items-center rounded-sm border border-stone-200 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40"><ArrowLeft aria-hidden="true" className="size-3.5" /></button>
             {Array.from({ length: totalPages }, (_, index) => index + 1).map((pageNumber) => (
@@ -557,9 +935,24 @@ export function AdminReservations() {
       </div>
 
       <div className="sr-only" aria-live="polite">Showing {visibleRows.length} reservations</div>
-      {createOpen && <ReservationDialog onClose={() => setCreateOpen(false)} onCreate={createReservation} reservations={rows} inventory={rooms} />}
-      {selectedReservation && <ReservationDetails reservation={selectedReservation} inventory={rooms} onClose={() => setSelectedReservation(null)} />}
-      {reservationToCancel && <CancelReservationDialog reservation={reservationToCancel} onClose={() => setReservationToCancel(null)} onConfirm={cancelReservation} />}
+      {createOpen && <ReservationDialog
+        onClose={() => setCreateOpen(false)}
+        onCreate={createReservation}
+        hotelId={hotelId}
+        inventory={rooms}
+        roomTypes={roomTypes}
+        roomLoading={roomLoading}
+        roomError={roomError}
+      />}
+      {selectedReservation && <ReservationDetails
+        reservation={selectedReservation}
+        inventory={rooms}
+        hotelId={hotelId}
+        onClose={() => setSelectedReservation(null)}
+        onRecordPayment={(payment) => recordPayment(selectedReservation, payment)}
+        pendingPayment={selectedReservation.id ? pendingPayments[selectedReservation.id] : undefined}
+      />}
+      {reservationToCancel && <CancelReservationDialog reservation={reservationToCancel} onClose={() => setReservationToCancel(null)} onConfirm={cancelReservation} saving={cancelling} />}
     </section>
   )
 }

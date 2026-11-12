@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowDownToLine,
@@ -22,6 +22,9 @@ import {
   X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { fetchAllReservations } from './adminReservationsApi'
+import { fetchHotelGuestProfiles, updateHotelGuestProfile } from './adminGuestsApi'
+import type { HotelGuestProfile } from './adminGuestsApi'
 import { useAdminReservations } from './AdminReservationsContext'
 import {
   formatReservationDate,
@@ -32,59 +35,53 @@ import {
 import type { Reservation } from './adminReservationsData'
 import type { Room } from './adminRoomsData'
 
-type GuestTier = 'VIP Butler' | 'VIP Titanium' | 'VIP Guest' | 'Standard Folio' | 'Suites Member'
-
 type Guest = {
+  key: string
   id: string
   name: string
   email: string
   phone: string
   country: string
   countryCode: string
-  tier: GuestTier
+  tier: string
   memberSince: string
   returning: boolean
 }
 
-type GuestDraft = Pick<Guest, 'name' | 'email' | 'phone' | 'country' | 'tier'>
+type GuestDraft = Pick<Guest, 'country' | 'tier'>
 
-const guestMetadata: { country: string; countryCode: string; tier: GuestTier; memberSince: string; returning: boolean }[] = [
-  { country: 'Nigeria', countryCode: 'NG', tier: 'VIP Butler', memberSince: '2023-01-14', returning: true },
-  { country: 'Nigeria', countryCode: 'NG', tier: 'VIP Titanium', memberSince: '2024-06-02', returning: true },
-  { country: 'United Kingdom', countryCode: 'GB', tier: 'Standard Folio', memberSince: '2025-03-19', returning: false },
-  { country: 'Ghana', countryCode: 'GH', tier: 'VIP Guest', memberSince: '2024-10-10', returning: true },
-  { country: 'Nigeria', countryCode: 'NG', tier: 'Standard Folio', memberSince: '2025-08-03', returning: false },
-  { country: 'Switzerland', countryCode: 'CH', tier: 'Suites Member', memberSince: '2025-01-24', returning: false },
-  { country: 'Nigeria', countryCode: 'NG', tier: 'VIP Butler', memberSince: '2022-11-06', returning: true },
-  { country: 'Nigeria', countryCode: 'NG', tier: 'VIP Guest', memberSince: '2025-07-12', returning: false },
-]
-
-function createGuests(reservations: Reservation[]): Guest[] {
-  const seenGuests = new Set<string>()
-  return reservations.flatMap((reservation, index) => {
-    const identity = guestIdentity(reservation)
-    if (seenGuests.has(identity)) return []
-    seenGuests.add(identity)
-    const metadata = guestMetadata[index % guestMetadata.length]
-    return [{
-      id: `OPZY-GST-${reservation.reference.slice(-4)}`,
-      name: reservation.guest,
-      email: reservation.email,
-      phone: reservation.phone,
-      ...metadata,
-      memberSince: reservation.registeredAt ?? metadata.memberSince,
-    }]
+function createGuests(profiles: HotelGuestProfile[], reservations: Reservation[]): Guest[] {
+  return profiles.map((profile) => {
+    const guest = {
+      key: profile.id,
+      id: profile.id,
+      name: profile.name,
+      email: profile.email,
+      phone: profile.phone,
+      country: profile.country ?? '',
+      countryCode: profile.countryCode ?? countryCodeFor(profile.country ?? ''),
+      tier: profile.tier ?? '',
+      memberSince: profile.createdAt ?? '',
+      returning: false,
+    }
+    return {
+      ...guest,
+      returning: reservationsForGuest(guest, reservations).length > 1,
+    }
   })
 }
 
-function guestIdentity(person: Pick<Guest, 'email' | 'phone'> | Pick<Reservation, 'email' | 'phone'>) {
-  const email = person.email.trim().toLowerCase()
-  return email ? `email:${email}` : `phone:${person.phone.replace(/\D/g, '')}`
+function reservationsForGuest(guest: Pick<Guest, 'id' | 'email' | 'phone'>, reservations: Reservation[]) {
+  const email = guest.email.trim().toLowerCase()
+  const phone = guest.phone.replace(/\D/g, '')
+  return reservations.filter((reservation) => (
+    reservation.guestId === guest.id
+    || Boolean(email && reservation.email.trim().toLowerCase() === email)
+    || Boolean(phone && reservation.phone.replace(/\D/g, '') === phone)
+  ))
 }
 
 const pageSize = 8
-const guestTiers: GuestTier[] = ['VIP Butler', 'VIP Titanium', 'VIP Guest', 'Standard Folio', 'Suites Member']
-const countries = ['Nigeria', 'United Kingdom', 'Ghana', 'Switzerland']
 const guestStatus = (reservations: Reservation[]) => reservations.some((reservation) => reservation.folio === 'Checked In')
   ? 'In-House'
   : reservations.some((reservation) => reservation.folio === 'Confirmed' || reservation.folio === 'Pending Payment')
@@ -124,7 +121,7 @@ function addNightsToDate(date: string, nights: number) {
 
 function exportGuests(guests: Guest[]) {
   const columns: (keyof Guest)[] = ['id', 'name', 'email', 'phone', 'country', 'tier', 'memberSince']
-  const escapeValue = (value: string | boolean) => `"${String(value).replaceAll('"', '""')}"`
+  const escapeValue = (value: string | boolean | undefined) => `"${String(value ?? '').replaceAll('"', '""')}"`
   const content = [
     columns.join(','),
     ...guests.map((guest) => columns.map((column) => escapeValue(guest[column])).join(',')),
@@ -137,21 +134,20 @@ function exportGuests(guests: Guest[]) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function GuestDialog({ guest, onClose, onSave }: {
+function GuestDialog({ guest, onClose, onSave, saving, error }: {
   guest: Guest
   onClose: () => void
   onSave: (draft: GuestDraft) => void
+  saving: boolean
+  error: string
 }) {
-  const [name, setName] = useState(guest.name)
-  const [email, setEmail] = useState(guest.email)
-  const [phone, setPhone] = useState(guest.phone)
   const [country, setCountry] = useState(guest.country)
-  const [tier, setTier] = useState<GuestTier>(guest.tier)
+  const [tier, setTier] = useState(guest.tier)
   const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-[13px] text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
 
   function submitGuest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    onSave({ name: name.trim(), email: email.trim(), phone: phone.trim(), country, tier })
+    onSave({ country: country.trim(), tier: tier.trim() })
   }
 
   return (
@@ -160,38 +156,26 @@ function GuestDialog({ guest, onClose, onSave }: {
         <header className="flex items-start justify-between border-b border-stone-200 bg-white px-5 py-4">
           <div>
             <p className="text-[11px] font-semibold tracking-[0.15em] text-amber-800">GUEST DIRECTORY</p>
-            <h2 id="guest-dialog-title" className="mt-1 font-display text-xl text-ink">Edit Guest Profile</h2>
-            <p className="mt-1 text-[12px] text-muted">Update contact details and guest classification.</p>
+            <h2 id="guest-dialog-title" className="mt-1 font-display text-xl text-ink">Update Guest Profile</h2>
+            <p className="mt-1 text-[12px] text-muted">Update the guest’s country of residence and tier.</p>
           </div>
           <button type="button" onClick={onClose} aria-label="Close guest form" className="grid size-8 place-items-center text-muted hover:bg-stone-100"><X aria-hidden="true" className="size-4" /></button>
         </header>
         <form onSubmit={submitGuest} className="flex min-h-0 flex-1 flex-col">
           <div className="flex-1 space-y-4 overflow-y-auto p-5">
-            <label className="block text-[12px] font-semibold tracking-wide text-ink">GUEST NAME
-              <input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} placeholder="Full name" required />
-            </label>
-            <label className="block text-[12px] font-semibold tracking-wide text-ink">EMAIL ADDRESS
-              <input className={fieldClass} type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="guest@example.com" required />
-            </label>
-            <label className="block text-[12px] font-semibold tracking-wide text-ink">PHONE NUMBER
-              <input className={fieldClass} type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+234 800 000 0000" required />
-            </label>
             <div className="grid grid-cols-2 gap-3">
               <label className="block text-[12px] font-semibold tracking-wide text-ink">COUNTRY
-                <select className={fieldClass} value={country} onChange={(event) => setCountry(event.target.value)}>
-                  {countries.map((item) => <option key={item}>{item}</option>)}
-                </select>
+                <input className={fieldClass} value={country} onChange={(event) => setCountry(event.target.value)} placeholder="Country" />
               </label>
               <label className="block text-[12px] font-semibold tracking-wide text-ink">GUEST TIER
-                <select className={fieldClass} value={tier} onChange={(event) => setTier(event.target.value as GuestTier)}>
-                  {guestTiers.map((item) => <option key={item}>{item}</option>)}
-                </select>
+                <input className={fieldClass} value={tier} onChange={(event) => setTier(event.target.value)} placeholder="Tier" />
               </label>
             </div>
+            {error && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-800">{error}</p>}
           </div>
           <footer className="flex justify-end gap-2 border-t border-stone-200 bg-white p-4">
             <button type="button" onClick={onClose} className="border border-stone-300 px-4 py-2.5 text-[12px] font-semibold text-ink hover:bg-stone-50">Cancel</button>
-            <button type="submit" className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[12px] font-semibold text-white hover:bg-forest-deep"><Check aria-hidden="true" className="size-3.5" /> Save Guest</button>
+            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[12px] font-semibold text-white hover:bg-forest-deep disabled:opacity-60"><Check aria-hidden="true" className="size-3.5" />{saving ? 'Saving…' : 'Save Guest'}</button>
           </footer>
         </form>
       </section>
@@ -293,7 +277,7 @@ function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExt
   onClose: () => void
   onExtendStay: () => void
 }) {
-  const guestReservations = reservations.filter((reservation) => guestIdentity(reservation) === guestIdentity(guest))
+  const guestReservations = reservationsForGuest(guest, reservations)
   const completedStays = guestReservations.filter((reservation) => reservation.folio === 'Checked Out')
   const cancelledStays = guestReservations.filter((reservation) => reservation.folio === 'Cancelled')
   const lifetimeRevenue = guestReservations.reduce((total, reservation) => total + reservationPaidAmount(reservation), 0)
@@ -312,22 +296,22 @@ function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExt
             <span className="grid size-10 shrink-0 place-items-center bg-forest font-display text-base text-champagne">{initials(guest.name)}</span>
             <div className="min-w-0 flex-1">
               <h3 className="font-display text-base leading-tight text-ink">{guest.name}</h3>
-              <p className="mt-1 truncate text-[9px] text-muted">{guest.id}</p>
+              <p className="mt-1 truncate text-[9px] text-muted">{guest.id ?? 'Database guest ID unavailable'}</p>
             </div>
           </div>
           <div className="mt-2 flex flex-wrap gap-1">
-            <span className="border border-stone-200 bg-stone-50 px-1.5 py-1 text-[9px] text-stone-700">{guest.id}</span>
+            <span className="border border-stone-200 bg-stone-50 px-1.5 py-1 text-[9px] text-stone-700">{guest.id ?? 'Guest ID unavailable'}</span>
             {activeReservation && <span className="bg-amber-100 px-1.5 py-1 text-[9px] font-semibold text-amber-950">In-House · {activeReservation.room} · {roomDisplayName(activeReservation.assignedRoomId, inventory)}</span>}
             {!activeReservation && nextReservation && <span className="bg-sky-50 px-1.5 py-1 text-[9px] font-semibold text-sky-900">Upcoming Stay</span>}
-            <span className="inline-flex items-center gap-1 bg-amber-50 px-1.5 py-1 text-[9px] text-amber-950"><Crown aria-hidden="true" className="size-2.5" />{guest.tier} Service</span>
+            {guest.tier && <span className="inline-flex items-center gap-1 bg-amber-50 px-1.5 py-1 text-[9px] text-amber-950"><Crown aria-hidden="true" className="size-2.5" />{guest.tier} Service</span>}
           </div>
         </section>
 
         <section className="grid grid-cols-2 gap-x-3 gap-y-2 border border-stone-100 bg-stone-50/70 p-2.5 text-[9px]">
           <div className="min-w-0"><span className="text-muted">EMAIL ADDRESS</span><strong className="mt-0.5 block truncate font-medium text-ink">{guest.email}</strong></div>
           <div><span className="text-muted">PHONE NUMBER</span><strong className="mt-0.5 block font-medium text-ink">{guest.phone}</strong></div>
-          <div><span className="text-muted">ORIGIN / RESIDENCE</span><strong className="mt-0.5 block font-medium text-ink">{guest.country}</strong></div>
-          <div><span className="text-muted">REGISTERED MEMBER SINCE</span><strong className="mt-0.5 block font-medium text-ink">{formatReservationDate(guest.memberSince)} {guest.memberSince.slice(0, 4)}</strong></div>
+          <div><span className="text-muted">ORIGIN / RESIDENCE</span><strong className="mt-0.5 block font-medium text-ink">{guest.country || 'Not provided'}</strong></div>
+          <div>          <span className="text-muted">REGISTERED MEMBER SINCE</span><strong className="mt-0.5 block font-medium text-ink">{guest.memberSince ? `${formatReservationDate(guest.memberSince)} ${guest.memberSince.slice(0, 4)}` : 'Not provided'}</strong></div>
         </section>
 
         <section>
@@ -401,10 +385,16 @@ function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExt
 }
 
 export function AdminGuests() {
-  const { reservations, setReservations, rooms } = useAdminReservations()
+  const { rooms } = useAdminReservations()
+  const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
+  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [guests, setGuests] = useState<Guest[]>([])
+  const [guestsLoading, setGuestsLoading] = useState(Boolean(hotelId))
+  const [guestsError, setGuestsError] = useState('')
+  const [guestSaving, setGuestSaving] = useState(false)
+  const [guestSaveError, setGuestSaveError] = useState('')
   const [currentMonth] = useState(() => new Date().toISOString().slice(0, 7))
-  const [guests, setGuests] = useState(() => createGuests(reservations))
-  const [selectedId, setSelectedId] = useState(guests[0]?.id ?? '')
+  const [selectedId, setSelectedId] = useState('')
   const [query, setQuery] = useState('')
   const [tierFilter, setTierFilter] = useState('All Guest Types')
   const [countryFilter, setCountryFilter] = useState('All Countries')
@@ -413,25 +403,44 @@ export function AdminGuests() {
   const [page, setPage] = useState(1)
   const [dialog, setDialog] = useState<'add' | 'edit' | 'extend' | null>(null)
 
-  const registeredGuests = useMemo(() => {
-    const reservationGuests = createGuests(reservations)
-    const guestIdentities = new Set(guests.map(guestIdentity))
-    const additions = reservationGuests.filter((guest) => !guestIdentities.has(guestIdentity(guest)))
-    return additions.length ? [...guests, ...additions] : guests
-  }, [guests, reservations])
+  useEffect(() => {
+    if (!hotelId) return
 
-  const selectedGuest = registeredGuests.find((guest) => guest.id === selectedId)
+    let cancelled = false
+    void Promise.all([fetchHotelGuestProfiles(hotelId), fetchAllReservations(hotelId)])
+      .then(([profiles, result]) => {
+        if (cancelled) return
+        setReservations(result.reservations)
+        const loadedGuests = createGuests(profiles, result.reservations)
+        setGuests(loadedGuests)
+        setSelectedId(loadedGuests[0]?.key ?? '')
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setGuestsError(error instanceof Error ? error.message : 'Could not load hotel guests.')
+        }
+      })
+      .finally(() => { if (!cancelled) setGuestsLoading(false) })
+
+    return () => { cancelled = true }
+  }, [hotelId])
+
+  const guestLoadError = !hotelId ? 'Select a hotel to load its guests.' : guestsError
+  const registeredGuests = guests
+  const countryOptions = Array.from(new Set(registeredGuests.map((guest) => guest.country).filter(Boolean))).sort()
+  const tierOptions = Array.from(new Set(registeredGuests.map((guest) => guest.tier).filter(Boolean))).sort()
+  const selectedGuest = registeredGuests.find((guest) => guest.key === selectedId)
   const selectedInHouseReservation = selectedGuest
-    ? reservations.find((reservation) => guestIdentity(reservation) === guestIdentity(selectedGuest) && reservation.folio === 'Checked In')
+    ? reservationsForGuest(selectedGuest, reservations).find((reservation) => reservation.folio === 'Checked In')
     : undefined
   const returningCount = registeredGuests.filter((guest) => guest.returning).length
-  const inHouseCount = registeredGuests.filter((guest) => guestStatus(reservations.filter((reservation) => guestIdentity(reservation) === guestIdentity(guest))) === 'In-House').length
+  const inHouseCount = registeredGuests.filter((guest) => guestStatus(reservationsForGuest(guest, reservations)) === 'In-House').length
   const newThisMonth = registeredGuests.filter((guest) => guest.memberSince.slice(0, 7) === currentMonth).length
 
   const filteredGuests = useMemo(() => registeredGuests.filter((guest) => {
-    const relatedReservations = reservations.filter((reservation) => guestIdentity(reservation) === guestIdentity(guest))
+    const relatedReservations = reservationsForGuest(guest, reservations)
     const status = guestStatus(relatedReservations)
-    const searchValue = `${guest.id} ${guest.name} ${guest.email} ${guest.phone}`.toLowerCase()
+    const searchValue = `${guest.id ?? ''} ${guest.name} ${guest.email} ${guest.phone}`.toLowerCase()
     return (!query.trim() || searchValue.includes(query.trim().toLowerCase()))
       && (tierFilter === 'All Guest Types' || guest.tier === tierFilter)
       && (countryFilter === 'All Countries' || guest.country === countryFilter)
@@ -448,12 +457,30 @@ export function AdminGuests() {
     setPage(1)
   }
 
-  function saveGuest(draft: GuestDraft) {
-    if (!selectedGuest) return
-    setGuests((current) => current.map((guest) => guest.id === selectedGuest.id
-      ? { ...guest, ...draft, countryCode: countryCodeFor(draft.country) }
-      : guest))
-    setDialog(null)
+  async function saveGuest(draft: GuestDraft) {
+    if (!selectedGuest || !hotelId) return
+    const changes: { country?: string; membershipTier?: string } = {}
+    if (draft.country !== selectedGuest.country) changes.country = draft.country
+    if (draft.tier !== selectedGuest.tier) changes.membershipTier = draft.tier
+    if (!Object.keys(changes).length) {
+      setDialog(null)
+      return
+    }
+
+    setGuestSaving(true)
+    setGuestSaveError('')
+    try {
+      await updateHotelGuestProfile(hotelId, selectedGuest.id, changes)
+      const countryCode = countryCodeFor(draft.country)
+      setGuests((current) => current.map((guest) => guest.key === selectedGuest.key
+        ? { ...guest, ...draft, countryCode: countryCode || guest.countryCode }
+        : guest))
+      setDialog(null)
+    } catch (error: unknown) {
+      setGuestSaveError(error instanceof Error ? error.message : 'Could not update the guest profile.')
+    } finally {
+      setGuestSaving(false)
+    }
   }
 
   function saveStayExtension(updatedReservation: Reservation) {
@@ -487,22 +514,22 @@ export function AdminGuests() {
         </div>
       </header>
 
+      {guestLoadError && <p role="alert" className="mb-4 border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-800">{guestLoadError}</p>}
+
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: 'TOTAL GUESTS', value: registeredGuests.length.toLocaleString(), note: 'Registered guest profiles across all wings', icon: UsersRound },
-          { label: 'RETURNING GUESTS', value: returningCount.toLocaleString(), note: `${registeredGuests.length ? Math.round(returningCount / registeredGuests.length * 100) : 0}% guest retention rate`, icon: RefreshCw, change: '+4.2% MoM' },
-          { label: 'NEW GUESTS THIS MONTH', value: newThisMonth.toLocaleString(), note: 'Joined the OPZY guest registry', icon: UserRound },
-          { label: 'CURRENTLY STAYING', value: inHouseCount.toLocaleString(), note: 'Active in-house guests in suites & villas', icon: BedDouble },
-        ].map(({ label, value, note, icon: Icon, change }) => (
+          { label: 'TOTAL GUESTS', value: guestsLoading ? '…' : registeredGuests.length.toLocaleString(), note: 'Unique guests with hotel reservations', icon: UsersRound },
+          { label: 'RETURNING GUESTS', value: guestsLoading ? '…' : returningCount.toLocaleString(), note: `${registeredGuests.length ? Math.round(returningCount / registeredGuests.length * 100) : 0}% have multiple reservations`, icon: RefreshCw },
+          { label: 'NEW GUESTS THIS MONTH', value: guestsLoading ? '…' : newThisMonth.toLocaleString(), note: 'Based on guest profile registration date', icon: UserRound },
+          { label: 'CURRENTLY STAYING', value: guestsLoading ? '…' : inHouseCount.toLocaleString(), note: 'Guests with checked-in reservations', icon: BedDouble },
+        ].map(({ label, value, note, icon: Icon }) => (
           <article key={label} className="border border-stone-200/80 bg-white p-3.5 shadow-sm sm:p-4">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] font-semibold tracking-[0.12em] text-muted">{label}</span>
               <span className="grid size-8 place-items-center bg-paper text-forest"><Icon aria-hidden="true" className="size-4" /></span>
             </div>
             <strong className="mt-1 block font-display text-2xl text-ink">{value}</strong>
-            <p className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted">
-              {change && <span className="bg-amber-50 px-1 py-0.5 font-semibold text-amber-900">{change}</span>}{note}
-            </p>
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-muted">{note}</p>
           </article>
         ))}
       </div>
@@ -514,15 +541,15 @@ export function AdminGuests() {
             <span className="sr-only">Search guests</span>
             <input value={query} onChange={(event) => updateFilter(setQuery, event.target.value)} placeholder="Search guest, email, phone or ID..." className="min-w-0 flex-1 bg-transparent text-[11px] outline-none placeholder:text-muted/70" />
           </label>
-          <SelectFilter label="Guest type" value={tierFilter} options={['All Guest Types', ...guestTiers]} onChange={(value) => updateFilter(setTierFilter, value)} className={selectClass} />
-          <SelectFilter label="Country" value={countryFilter} options={['All Countries', ...countries]} onChange={(value) => updateFilter(setCountryFilter, value)} className={selectClass} />
+          <SelectFilter label="Guest type" value={tierFilter} options={['All Guest Types', ...tierOptions]} onChange={(value) => updateFilter(setTierFilter, value)} className={selectClass} />
+          <SelectFilter label="Country" value={countryFilter} options={['All Countries', ...countryOptions]} onChange={(value) => updateFilter(setCountryFilter, value)} className={selectClass} />
           <SelectFilter label="Registration date" value={dateFilter} options={['All Dates', 'This Month']} onChange={(value) => updateFilter(setDateFilter, value)} className={selectClass} />
           <SelectFilter label="Guest status" value={statusFilter} options={['All Statuses', 'In-House', 'Upcoming', 'Past Guest']} onChange={(value) => updateFilter(setStatusFilter, value)} className={selectClass} />
           <button type="button" onClick={clearFilters} className="inline-flex h-9 items-center justify-center gap-1 border border-stone-200 px-2 text-[10px] text-muted hover:bg-stone-50 hover:text-ink"><X aria-hidden="true" className="size-3" /> Clear Filters</button>
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[9px] text-muted">
-          <span className="inline-flex items-center gap-1.5"><i className="size-1.5 rounded-full bg-amber-800" /> Showing {filteredGuests.length ? (currentPage - 1) * pageSize + 1 : 0}–{Math.min(currentPage * pageSize, filteredGuests.length)} of {filteredGuests.length} guests</span>
-          <span className="inline-flex items-center gap-1"><Clock3 aria-hidden="true" className="size-3" /> Guest registry synced with reservation folios</span>
+          <span className="inline-flex items-center gap-1.5"><i className="size-1.5 rounded-full bg-amber-800" />{guestsLoading ? 'Loading guests from the database…' : `Showing ${filteredGuests.length ? (currentPage - 1) * pageSize + 1 : 0}–${Math.min(currentPage * pageSize, filteredGuests.length)} of ${filteredGuests.length} guests`}</span>
+          <span className="inline-flex items-center gap-1"><Clock3 aria-hidden="true" className="size-3" /> Guests loaded from hotel reservation records</span>
         </div>
       </section>
 
@@ -539,16 +566,18 @@ export function AdminGuests() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {visibleGuests.map((guest) => {
-                  const relatedReservations = reservations.filter((reservation) => guestIdentity(reservation) === guestIdentity(guest))
+                {guestsLoading && <tr><td colSpan={4} className="px-4 py-12 text-center text-[11px] text-muted">Loading guests from the database…</td></tr>}
+                {!guestsLoading && guestLoadError && <tr><td colSpan={4} className="px-4 py-12 text-center text-[11px] text-rose-800">Guest data could not be loaded.</td></tr>}
+                {!guestsLoading && !guestLoadError && visibleGuests.map((guest) => {
+                  const relatedReservations = reservationsForGuest(guest, reservations)
                   const status = guestStatus(relatedReservations)
-                  const active = selectedId === guest.id
+                  const active = selectedId === guest.key
                   const currentStay = relatedReservations.find((reservation) => reservation.folio === 'Checked In')
                     ?? relatedReservations.find((reservation) => ['Confirmed', 'Pending Payment'].includes(reservation.folio))
                   return (
-                    <tr key={guest.id} onClick={() => setSelectedId(guest.id)} className={`cursor-pointer transition-colors hover:bg-amber-50/40 ${active ? 'bg-amber-50/50' : 'bg-white'}`}>
+                    <tr key={guest.key} onClick={() => setSelectedId(guest.key)} className={`cursor-pointer transition-colors hover:bg-amber-50/40 ${active ? 'bg-amber-50/50' : 'bg-white'}`}>
                       <td className={`border-l-2 px-3 py-2.5 align-top text-[11px] text-stone-600 ${active ? 'border-amber-800' : 'border-transparent'}`}>
-                        <span className="font-mono">{guest.id}</span>
+                        <span className="font-mono">{guest.id ?? '—'}</span>
                         <span className={`mt-1 block w-fit border px-1.5 py-0.5 ${guestStatusClass(status)}`}>{status}</span>
                       </td>
                       <td className="px-3 py-2.5 align-top">
@@ -556,7 +585,7 @@ export function AdminGuests() {
                           <span className="grid size-7 shrink-0 place-items-center rounded-full bg-stone-100 text-[10px] font-semibold text-forest">{initials(guest.name)}</span>
                           <span className="min-w-0">
                             <strong className="block text-[12px] font-medium leading-tight text-ink">{guest.name}</strong>
-                            <small className="mt-0.5 block truncate text-[10px] text-muted">{guest.tier}</small>
+                            {guest.tier && <small className="mt-0.5 block truncate text-[10px] text-muted">{guest.tier}</small>}
                             {currentStay && <small className="mt-0.5 block truncate text-[10px] text-muted">{roomDisplayName(currentStay.assignedRoomId, rooms)}</small>}
                           </span>
                         </span>
@@ -565,11 +594,11 @@ export function AdminGuests() {
                         <span className="flex min-w-0 items-center gap-1"><Mail aria-hidden="true" className="size-2.5 shrink-0 text-amber-800" /><span className="truncate">{guest.email}</span></span>
                         <span className="mt-1 flex items-center gap-1"><Phone aria-hidden="true" className="size-2.5 shrink-0 text-muted" />{guest.phone}</span>
                       </td>
-                      <td className="px-3 py-2.5 align-top text-[11px] text-ink"><span className="mr-1">{countryFlag(guest.countryCode)}</span>{guest.country}</td>
+                      <td className="px-3 py-2.5 align-top text-[11px] text-ink">{guest.country ? <><span className="mr-1">{countryFlag(guest.countryCode)}</span>{guest.country}</> : '—'}</td>
                     </tr>
                   )
                 })}
-                {visibleGuests.length === 0 && (
+                {!guestsLoading && !guestLoadError && visibleGuests.length === 0 && (
                   <tr><td colSpan={4} className="px-4 py-12 text-center">
                     <UsersRound aria-hidden="true" className="mx-auto size-6 text-muted" />
                     <p className="mt-2 font-display text-lg text-ink">No guests found</p>
@@ -591,7 +620,7 @@ export function AdminGuests() {
             </div>
           </footer>
         </section>
-        {selectedGuest && <GuestInspector guest={selectedGuest} reservations={reservations} inventory={rooms} onEdit={() => setDialog('edit')} onExtendStay={() => setDialog('extend')} onClose={() => setSelectedId('')} />}
+        {selectedGuest && <GuestInspector guest={selectedGuest} reservations={reservations} inventory={rooms} onEdit={() => { setGuestSaveError(''); setDialog('edit') }} onExtendStay={() => setDialog('extend')} onClose={() => setSelectedId('')} />}
       </div>
 
       <footer className="mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-stone-200 py-3 text-[9px] text-muted">
@@ -606,6 +635,8 @@ export function AdminGuests() {
           guest={selectedGuest}
           onClose={() => setDialog(null)}
           onSave={saveGuest}
+          saving={guestSaving}
+          error={guestSaveError}
         />
       )}
       {dialog === 'extend' && selectedInHouseReservation && (

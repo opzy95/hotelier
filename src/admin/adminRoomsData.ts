@@ -63,6 +63,40 @@ export function getRoomStatusCounts(rooms: Room[]) {
   }, { Available: 0, Occupied: 0, Reserved: 0 })
 }
 
+export function getRoomStatusesForDate(rooms: Room[], reservations: Reservation[], date: string) {
+  const reservationsByRoom = new Map<string, Reservation[]>()
+
+  for (const reservation of reservations) {
+    const checkIn = reservation.checkIn.slice(0, 10)
+    const checkOut = reservation.checkOut.slice(0, 10)
+    if (
+      !reservation.assignedRoomId
+      || checkIn > date
+      || checkOut <= date
+      || ['Cancelled', 'Checked Out', 'No Show'].includes(reservation.folio)
+    ) continue
+
+    const roomReservations = reservationsByRoom.get(reservation.assignedRoomId) ?? []
+    roomReservations.push(reservation)
+    reservationsByRoom.set(reservation.assignedRoomId, roomReservations)
+  }
+
+  return rooms.map((room) => {
+    const currentReservations = reservationsByRoom.get(room.id)
+    if (!currentReservations?.length) return room
+
+    const checkedInReservation = currentReservations.find((reservation) => reservation.folio === 'Checked In')
+    const reservation = checkedInReservation ?? currentReservations[0]
+    const status: RoomStatus = checkedInReservation || room.status === 'Occupied' ? 'Occupied' : 'Reserved'
+    return {
+      ...room,
+      status,
+      guest: reservation.guest,
+      note: reservation.reference,
+    }
+  })
+}
+
 export function getAvailableRoomsForStay(
   rooms: Room[],
   reservations: Reservation[],
@@ -78,7 +112,7 @@ export function getAvailableRoomsForStay(
 
     const activeReservations = reservations.filter((reservation) => (
       reservation.assignedRoomId === room.id
-      && !['Cancelled', 'Checked Out'].includes(reservation.folio)
+      && !['Cancelled', 'Checked Out', 'No Show'].includes(reservation.folio)
     ))
     const hasDateConflict = activeReservations.some((reservation) => (
       checkIn < reservation.checkOut && reservation.checkIn < checkOut

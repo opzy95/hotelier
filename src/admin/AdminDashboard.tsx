@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowRight,
   BedDouble,
@@ -11,6 +11,8 @@ import {
   Wallet,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { fetchAllReservations } from './adminReservationsApi'
+import type { ReservationPage } from './adminReservationsApi'
 import { useAdminReservations } from './AdminReservationsContext'
 import {
   formatReservationDate,
@@ -20,7 +22,7 @@ import {
   reservationOutstandingAmount,
   reservationPaidAmount,
 } from './adminReservationsData'
-import { getRoomStatusCounts } from './adminRoomsData'
+import { getRoomStatusCounts, getRoomStatusesForDate } from './adminRoomsData'
 import { useAdminStaff } from './AdminStaffContext'
 import { useHotelSession } from './HotelSessionContext'
 
@@ -35,6 +37,8 @@ type Operation = {
   service: string
   status: OperationStatus
 }
+
+const EMPTY_RESERVATIONS: ReservationPage['reservations'] = []
 
 const initialOperations: Operation[] = [
   { guest: 'Chief A. Adeleke', room: 'Executive Lagoon Suite · Room 402', tier: 'VIP BUTLER', time: '14:00 WAT', service: 'Lagoon Jetty Shuttle', status: 'Check In' },
@@ -75,22 +79,61 @@ function MetricCard({ label, value, note, icon: Icon, change }: {
 }
 
 export function AdminDashboard() {
-  const { reservations, rooms } = useAdminReservations()
+  const { rooms, roomLoading, roomError } = useAdminReservations()
   const { staff, departments } = useAdminStaff()
   const { hotelName, managerName } = useHotelSession()
-  const todayLabel = new Date().toLocaleDateString('en-GB', {
+  const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
+  const [reservationState, setReservationState] = useState<{
+    hotelId: string
+    result?: ReservationPage
+    error?: string
+  }>({ hotelId: '' })
+  const [todayLabel] = useState(() => new Date().toLocaleDateString('en-GB', {
     timeZone: 'Africa/Lagos',
     weekday: 'long',
     day: 'numeric',
     month: 'long',
     year: 'numeric',
-  })
+  }))
+  const [todayDate] = useState(() => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date()))
   const [operationTab, setOperationTab] = useState<OperationTab>('Arrivals')
   const [operations, setOperations] = useState(initialOperations)
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const rowsPerPage = 5
 
+  useEffect(() => {
+    if (!hotelId) return
+
+    let cancelled = false
+    void fetchAllReservations(hotelId)
+      .then((result) => {
+        if (!cancelled) setReservationState({ hotelId, result })
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setReservationState({
+            hotelId,
+            error: error instanceof Error ? error.message : 'Could not load hotel reservations.',
+          })
+        }
+      })
+
+    return () => { cancelled = true }
+  }, [hotelId])
+
+  const hasReservationData = reservationState.hotelId === hotelId && Boolean(reservationState.result)
+  const reservationsLoading = Boolean(hotelId) && reservationState.hotelId !== hotelId
+  const reservationsError = !hotelId
+    ? 'Select a hotel to load its reservations.'
+    : reservationState.hotelId === hotelId ? reservationState.error ?? '' : ''
+  const reservations = hasReservationData ? reservationState.result?.reservations ?? EMPTY_RESERVATIONS : EMPTY_RESERVATIONS
+  const reservationTotal = hasReservationData ? reservationState.result?.pagination.total ?? 0 : 0
   const filteredReservations = useMemo(() => {
     const query = search.trim().toLowerCase()
     return reservations.filter((reservation) => (
@@ -109,14 +152,22 @@ export function AdminDashboard() {
       ? operation.status === 'Check In' || operation.status === 'Checked In' || operation.status === 'Pre-Assigned'
       : operation.status === 'Check Out' || operation.status === 'Checked Out'
   ))
-  const operationalRooms = rooms.filter((room) => room.active)
+  const roomsForToday = useMemo(
+    () => getRoomStatusesForDate(rooms, reservations, todayDate),
+    [rooms, reservations, todayDate],
+  )
+  const operationalRooms = roomsForToday.filter((room) => room.active)
   const roomCounts = getRoomStatusCounts(operationalRooms)
+  const roomOverviewLoading = roomLoading || reservationsLoading
   const onDutyStaff = staff.filter((member) => member.status === 'On Duty').length
   const roomStatuses = [
     { label: 'Available', count: roomCounts.Available, dot: 'bg-emerald-500', bar: 'bg-emerald-500' },
     { label: 'Occupied', count: roomCounts.Occupied, dot: 'bg-amber-800', bar: 'bg-amber-800' },
     { label: 'Reserved', count: roomCounts.Reserved, dot: 'bg-sky-500', bar: 'bg-sky-500' },
   ]
+  const roomsWithGuests = operationalRooms.filter((room) => (
+    (room.status === 'Occupied' || room.status === 'Reserved') && room.guest
+  ))
   const collectedAmount = reservationCollectedAmount(reservations)
   const outstandingAmount = reservationOutstandingAmount(reservations)
   const paymentPositionTotal = collectedAmount + outstandingAmount
@@ -155,10 +206,12 @@ export function AdminDashboard() {
         </div>
       </header>
 
+      {(reservationsError || roomError) && <p role="alert" className="mb-4 border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-800">{reservationsError || roomError}</p>}
+
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">
-        <MetricCard label="TOTAL RESERVATIONS" value={String(reservations.length)} note="Reservations currently available" icon={CalendarDays} />
-        <MetricCard label="PAYMENTS RECEIVED" value={reservationCurrency.format(collectedAmount)} note="Across all reservation folios" icon={Wallet} />
-        <MetricCard label="OCCUPANCY RATE" value={`${rooms.length ? Math.round((roomCounts.Occupied / rooms.length) * 100) : 0}%`} note={`Current room occupancy · ${roomCounts.Occupied} / ${rooms.length} rooms`} icon={BedDouble} />
+        <MetricCard label="TOTAL RESERVATIONS" value={reservationsLoading ? '…' : String(reservationTotal)} note="Reservations currently in the hotel database" icon={CalendarDays} />
+        <MetricCard label="PAYMENTS RECEIVED" value={reservationsLoading ? '…' : reservationCurrency.format(collectedAmount)} note="Across all reservation folios" icon={Wallet} />
+        <MetricCard label="OCCUPANCY RATE" value={roomOverviewLoading ? '…' : `${operationalRooms.length ? Math.round((roomCounts.Occupied / operationalRooms.length) * 100) : 0}%`} note={roomOverviewLoading ? 'Loading room and reservation data' : `Current room occupancy · ${roomCounts.Occupied} / ${operationalRooms.length} rooms`} icon={BedDouble} />
         <MetricCard label="TOTAL STAFF" value={String(staff.length)} note={`${onDutyStaff} on duty · ${departments.length} departments`} icon={UsersRound} />
       </div>
 
@@ -218,7 +271,9 @@ export function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
-                  {visibleReservations.map((reservation) => (
+                  {reservationsLoading && <tr><td className="px-4 py-8 text-center text-muted" colSpan={6}>Loading reservations…</td></tr>}
+                  {!reservationsLoading && reservationsError && <tr><td className="px-4 py-8 text-center text-rose-800" colSpan={6}>Reservations could not be loaded.</td></tr>}
+                  {!reservationsLoading && !reservationsError && visibleReservations.map((reservation) => (
                     <tr key={reservation.reference} className="text-muted hover:bg-paper/60">
                       <td className="whitespace-nowrap px-4 py-3 font-semibold text-forest">{reservation.reference}</td>
                       <td className="whitespace-nowrap px-4 py-3 text-ink">{reservation.guest}<small className="mt-1 block text-[9px] text-muted">{reservation.tier}</small></td>
@@ -237,14 +292,14 @@ export function AdminDashboard() {
                       </td>
                     </tr>
                   ))}
-                  {visibleReservations.length === 0 && (
+                  {!reservationsLoading && !reservationsError && visibleReservations.length === 0 && (
                     <tr><td className="px-4 py-8 text-center text-muted" colSpan={6}>No reservations match your search.</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
             <div className="flex flex-col gap-3 border-t border-stone-100 px-4 py-3 text-[10px] text-muted sm:flex-row sm:items-center sm:justify-between">
-              <span>Showing {visibleReservations.length ? (currentPage - 1) * rowsPerPage + 1 : 0}–{Math.min(currentPage * rowsPerPage, filteredReservations.length)} of {filteredReservations.length} active folios</span>
+              <span>Showing {visibleReservations.length ? (currentPage - 1) * rowsPerPage + 1 : 0}–{Math.min(currentPage * rowsPerPage, filteredReservations.length)} of {filteredReservations.length} matching reservations · {reservationTotal} total</span>
               <div className="flex items-center gap-1" aria-label="Reservation pagination">
                 <button type="button" aria-label="Previous reservations page" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)} className="grid size-7 place-items-center rounded border border-stone-200 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-40">
                   <ChevronLeft aria-hidden="true" className="size-3.5" />
@@ -266,19 +321,34 @@ export function AdminDashboard() {
                 <p className="text-[9px] font-semibold tracking-[0.15em] text-amber-800">INVENTORY HEALTH</p>
                 <h2 className="mt-1 font-display text-xl text-ink">Room Status Overview</h2>
               </div>
-              <span className="rounded-sm bg-stone-100 px-2 py-1 text-[9px] font-semibold text-ink">{rooms.length} TOTAL ROOMS</span>
+              <span className="rounded-sm bg-stone-100 px-2 py-1 text-[9px] font-semibold text-ink">{roomLoading ? '…' : rooms.length} TOTAL ROOMS</span>
             </div>
             <div className="mt-4 flex h-2 overflow-hidden rounded-full bg-stone-100" aria-label="Room status distribution">
-              {roomStatuses.map((status) => <span key={status.label} className={`${status.bar} h-full`} style={{ width: `${rooms.length ? (status.count / rooms.length) * 100 : 0}%` }} title={`${status.label}: ${status.count}`} />)}
+              {roomStatuses.map((status) => <span key={status.label} className={`${status.bar} h-full`} style={{ width: `${!roomOverviewLoading && operationalRooms.length ? (status.count / operationalRooms.length) * 100 : 0}%` }} title={`${status.label}: ${status.count}`} />)}
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2">
               {roomStatuses.map((status) => (
                 <div key={status.label} className="flex min-w-0 items-center justify-between gap-2 rounded-sm bg-paper px-2.5 py-2">
                   <span className="flex min-w-0 items-center gap-1.5 text-[10px] text-muted"><i className={`size-1.5 shrink-0 rounded-full ${status.dot}`} /><span className="truncate">{status.label}</span></span>
-                  <strong className="text-[10px] text-ink">{status.count}</strong>
+                  <strong className="text-[10px] text-ink">{roomOverviewLoading ? '…' : status.count}</strong>
                 </div>
               ))}
             </div>
+            {roomOverviewLoading && <p className="mt-3 text-[10px] text-muted">Loading room inventory and reservations…</p>}
+            {!roomOverviewLoading && roomsWithGuests.length > 0 && (
+              <div className="mt-4 border-t border-stone-100 pt-3">
+                <p className="text-[9px] font-semibold tracking-wide text-muted">GUESTS IN RESERVED / OCCUPIED ROOMS</p>
+                <ul className="mt-2 grid gap-2">
+                  {roomsWithGuests.map((room) => (
+                    <li key={room.id} className="flex items-center justify-between gap-3 text-[10px]">
+                      <span className="min-w-0 truncate text-ink">{room.guest}</span>
+                      <span className="shrink-0 text-muted">Room {room.name} · {room.status}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {!roomLoading && roomError && <p role="alert" className="mt-3 text-[10px] text-rose-800">{roomError}</p>}
             <p className="mt-4 flex flex-col gap-1 border-t border-stone-100 pt-3 text-[10px] text-muted sm:flex-row sm:items-center sm:justify-between">
               <span>Housekeeping turnaround · ~38 mins</span>
               <Link to="/dashboard/rooms" className="font-medium text-amber-900 hover:underline">Manage Housekeeping →</Link>

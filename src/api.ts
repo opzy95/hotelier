@@ -46,6 +46,16 @@ function getErrorMessageFromPayload(payload: unknown) {
 
   if ('message' in payload && typeof payload.message === 'string' && payload.message.trim().length > 0) return payload.message
 
+  if ('details' in payload && Array.isArray(payload.details)) {
+    const details = payload.details.flatMap((detail) => {
+      if (typeof detail !== 'object' || detail === null) return []
+      const path = 'path' in detail && typeof detail.path === 'string' ? detail.path : ''
+      const message = 'message' in detail && typeof detail.message === 'string' ? detail.message : ''
+      return message ? [path ? `${path}: ${message}` : message] : []
+    })
+    if (details.length) return details.join('; ')
+  }
+
   if ('error' in payload) {
     const { error } = payload
     if (typeof error === 'string' && error.trim().length > 0) return error

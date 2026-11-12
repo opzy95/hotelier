@@ -1,21 +1,31 @@
 export type PaymentStatus = 'Paid' | 'Partially Paid' | 'Pending' | 'Refunded'
-export type FolioStatus = 'Confirmed' | 'Checked In' | 'Pending Payment' | 'Cancelled' | 'Checked Out'
+export type FolioStatus = 'Confirmed' | 'Checked In' | 'Pending Payment' | 'Cancelled' | 'Checked Out' | 'No Show'
 
 export type Reservation = {
+  id?: string
+  guestId?: string
   reference: string
   guest: string
   email: string
   phone: string
+  guestCountry?: string
+  guestCountryCode?: string
+  guestTier?: string
+  guestCreatedAt?: string
   tier: string
   room: string
   assignedRoomId?: string
+  assignedRoomName?: string
+  source?: string
   registeredAt?: string
   checkIn: string
   checkOut: string
   adults: number
   children: number
   amount: number
+  currency?: string
   paidAmount?: number
+  balanceDue?: number
   nightlyRate?: number
   payment: PaymentStatus
   folio: FolioStatus
@@ -38,12 +48,20 @@ export const reservationCurrency = new Intl.NumberFormat('en-NG', {
   maximumFractionDigits: 0,
 })
 
+export function currencyMinorUnitScale(currency = 'NGN') {
+  const fractionDigits = new Intl.NumberFormat('en', {
+    style: 'currency',
+    currency,
+  }).resolvedOptions().maximumFractionDigits ?? 2
+  return 10 ** fractionDigits
+}
+
 export function reservationPaidAmount(reservation: Reservation) {
   return reservation.paidAmount ?? (reservation.payment === 'Paid' ? reservation.amount : 0)
 }
 
 export function reservationBalanceDue(reservation: Reservation) {
-  return Math.max(0, reservation.amount - reservationPaidAmount(reservation))
+  return Math.max(0, reservation.balanceDue ?? reservation.amount - reservationPaidAmount(reservation))
 }
 
 export function reservationCollectedAmount(reservations: Reservation[]) {
@@ -54,7 +72,7 @@ export function reservationCollectedAmount(reservations: Reservation[]) {
 
 export function reservationOutstandingAmount(reservations: Reservation[]) {
   return reservations.reduce((total, reservation) => (
-    reservation.folio === 'Cancelled' || reservation.payment === 'Refunded'
+    reservation.folio === 'Cancelled' || reservation.folio === 'No Show' || reservation.payment === 'Refunded'
       ? total
       : total + reservationBalanceDue(reservation)
   ), 0)
