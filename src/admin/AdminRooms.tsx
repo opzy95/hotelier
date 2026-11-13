@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   Archive,
@@ -23,7 +23,7 @@ import {
 } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
 import { createRoom, createRoomType, deactivateRoom, deactivateRoomType, deleteRoomTypePhoto, fetchRoomInventory, updateRoom, updateRoomType, uploadRoomTypePhotos } from './adminRoomsApi'
-import { getRoomStatusCounts } from './adminRoomsData'
+import { getRoomStatusCounts, getRoomStatusesForDate } from './adminRoomsData'
 import type { BedSetupItem, Room, RoomDraft, RoomStatus, RoomType, RoomTypeDraft } from './adminRoomsData'
 
 const statusDetails: Record<RoomStatus, { color: string; accent: string }> = {
@@ -33,6 +33,10 @@ const statusDetails: Record<RoomStatus, { color: string; accent: string }> = {
 }
 
 const pageSize = 8
+
+function currentDateKey() {
+  return new Date().toISOString().slice(0, 10)
+}
 
 function formatCurrency(amount: number, currencyCode: string) {
   try {
@@ -373,7 +377,18 @@ function RoomCard({ room, selected, onSelect, onEdit }: { room: Room; selected: 
 }
 
 export function AdminRooms() {
-  const { rooms: roomData, roomTypes, includeInactiveRooms, roomLoading: isLoading, roomError: loadError, refreshRoomInventory } = useAdminReservations()
+  const {
+    rooms: roomData,
+    reservations,
+    reservationsLoading,
+    reservationsError,
+    refreshReservations,
+    roomTypes,
+    includeInactiveRooms,
+    roomLoading: isLoading,
+    roomError: loadError,
+    refreshRoomInventory,
+  } = useAdminReservations()
   const [selectedId, setSelectedId] = useState('')
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
   const [actionError, setActionError] = useState('')
@@ -382,13 +397,21 @@ export function AdminRooms() {
   const [roomType, setRoomType] = useState('All Room Types')
   const [statusFilter, setStatusFilter] = useState('All Statuses')
   const [floorFilter, setFloorFilter] = useState('All Floors')
+  const [operationalDate] = useState(currentDateKey)
   const [page, setPage] = useState(1)
   const [listView, setListView] = useState(false)
   const [dialog, setDialog] = useState<'room' | 'types' | null>(null)
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null)
 
-  const operationalRooms = roomData
-  const activeRooms = roomData.filter((room) => room.active)
+  useEffect(() => {
+    refreshReservations()
+  }, [refreshReservations])
+
+  const operationalRooms = useMemo(
+    () => getRoomStatusesForDate(roomData, reservations, operationalDate),
+    [operationalDate, reservations, roomData],
+  )
+  const activeRooms = operationalRooms.filter((room) => room.active)
   const selectedRoom = operationalRooms.find((room) => room.id === selectedId)
   const editingRoom = roomData.find((room) => room.id === editingRoomId)
   const counts = getRoomStatusCounts(activeRooms)
@@ -533,14 +556,23 @@ export function AdminRooms() {
         </div>
       </header>
 
-      {(loadError || actionError) && <div role="alert" className="mb-4 flex items-center justify-between gap-3 border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] text-rose-900"><span>{actionError || loadError}</span>{loadError && <button type="button" onClick={() => refreshRoomInventory()} className="shrink-0 font-semibold underline underline-offset-2">Retry</button>}</div>}
+      {(loadError || reservationsError || actionError) && (
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-rose-200 bg-rose-50 px-3 py-2.5 text-[11px] text-rose-900">
+          <span>{actionError || reservationsError || loadError}</span>
+          <div className="flex gap-3">
+            {loadError && <button type="button" onClick={() => refreshRoomInventory()} className="shrink-0 font-semibold underline underline-offset-2">Retry room inventory</button>}
+            {reservationsError && <button type="button" onClick={refreshReservations} className="shrink-0 font-semibold underline underline-offset-2">Retry reservations</button>}
+          </div>
+        </div>
+      )}
+      {reservationsLoading && <p role="status" className="mb-3 text-[10px] text-muted">Syncing reservation statuses…</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
         {([
           { label: 'TOTAL ROOMS', status: null, value: activeRooms.length, icon: BedDouble, note: 'Active physical rooms' },
           { label: 'AVAILABLE', status: 'Available' as RoomStatus, value: counts.Available, icon: CircleCheck, note: 'Ready for immediate guest use' },
           { label: 'OCCUPIED', status: 'Occupied' as RoomStatus, value: counts.Occupied, icon: UsersRound, note: 'Currently checked in' },
-          { label: 'RESERVED', status: 'Reserved' as RoomStatus, value: counts.Reserved, icon: ClipboardList, note: 'Booked for current hotel date' },
+          { label: 'RESERVED', status: 'Reserved' as RoomStatus, value: counts.Reserved, icon: ClipboardList, note: 'Held for current or upcoming stays' },
         ]).map(({ label, status, value, icon: Icon, note }) => (
           <button
             type="button"
@@ -563,7 +595,7 @@ export function AdminRooms() {
             <h2 className="font-display text-sm text-ink">Inventory Allocation &amp; Live Capacity</h2>
             <p className="text-[9px] text-muted">{activeRooms.length} Total Operational Units</p>
           </div>
-          <span className="inline-flex items-center gap-1.5 text-[9px] text-forest"><i className="size-1.5 rounded-full bg-emerald-600" /> Room status from hotel records</span>
+          <span className="inline-flex items-center gap-1.5 text-[9px] text-forest"><i className="size-1.5 rounded-full bg-emerald-600" /> Room status reflects active reservations and hotel records</span>
         </div>
         <div className="mt-2 flex h-2 overflow-hidden bg-stone-100" aria-label="Room status allocation">
           {(['Available', 'Occupied', 'Reserved'] as RoomStatus[]).map((status) => (

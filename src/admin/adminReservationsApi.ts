@@ -19,6 +19,7 @@ export type ReservationDraft = {
   checkOut: string
   roomTypeId: string
   assignedRoomId?: string
+  source?: 'walk_in'
   guestName: string
   guestEmail: string
   guestPhone: string
@@ -171,6 +172,7 @@ function normalizeReservation(value: unknown): Reservation {
   const minorUnitScale = currencyMinorUnitScale(currency)
   const total = numberField(pricing, 'totalMinor') / minorUnitScale
   const paymentStatus = stringField(value, 'paymentStatus')
+  const source = optionalStringField(value, 'source')
   const folioByStatus: Record<string, Reservation['folio']> = {
     confirmed: 'Confirmed',
     cancelled: 'Cancelled',
@@ -195,17 +197,17 @@ function normalizeReservation(value: unknown): Reservation {
     guestId: optionalRecordId(guest) ?? optionalRecordId(value.guestId),
     reference: stringField(value, 'reference'),
     guest: stringField(guest, 'name'),
-    email: stringField(guest, 'email'),
+    email: typeof guest.email === 'string' ? guest.email : '',
     phone: stringField(guest, 'phone'),
     guestCountry: optionalStringField(guest, 'country'),
     guestCountryCode: optionalStringField(guest, 'countryCode'),
     guestTier: optionalStringField(guest, 'tier'),
     guestCreatedAt: optionalStringField(guest, 'createdAt')?.slice(0, 10),
-    tier: '',
+    tier: source === 'walk_in' ? 'Walk-in' : '',
     room: stringField(roomType, 'name'),
     assignedRoomId,
     assignedRoomName: assignedRoom && typeof assignedRoom.code === 'string' ? assignedRoom.code : undefined,
-    source: typeof value.source === 'string' ? value.source : undefined,
+    source,
     registeredAt: typeof value.createdAt === 'string' ? value.createdAt.slice(0, 10) : undefined,
     checkIn: stringField(value, 'checkIn'),
     checkOut: stringField(value, 'checkOut'),

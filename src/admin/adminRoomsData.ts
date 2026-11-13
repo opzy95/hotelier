@@ -63,31 +63,52 @@ export function getRoomStatusCounts(rooms: Room[]) {
   }, { Available: 0, Occupied: 0, Reserved: 0 })
 }
 
+function normalizeRoomReference(value: string | undefined) {
+  return value?.trim().toLowerCase().replace(/^room\s+/, '').replace(/^#/, '')
+}
+
 export function getRoomStatusesForDate(rooms: Room[], reservations: Reservation[], date: string) {
   const reservationsByRoom = new Map<string, Reservation[]>()
 
   for (const reservation of reservations) {
-    const checkIn = reservation.checkIn.slice(0, 10)
     const checkOut = reservation.checkOut.slice(0, 10)
     if (
-      !reservation.assignedRoomId
-      || checkIn > date
-      || checkOut <= date
+      checkOut < date
+      || (checkOut === date && reservation.folio !== 'Checked In')
       || ['Cancelled', 'Checked Out', 'No Show'].includes(reservation.folio)
     ) continue
 
-    const roomReservations = reservationsByRoom.get(reservation.assignedRoomId) ?? []
+    const references = [reservation.assignedRoomId, reservation.assignedRoomName]
+      .map(normalizeRoomReference)
+      .filter((reference): reference is string => Boolean(reference))
+    const assignedRoom = rooms.find((room) => (
+      references.includes(normalizeRoomReference(room.id) ?? '')
+      || references.includes(normalizeRoomReference(room.name) ?? '')
+    ))
+    if (!assignedRoom) continue
+
+    const roomReservations = reservationsByRoom.get(assignedRoom.id) ?? []
     roomReservations.push(reservation)
-    reservationsByRoom.set(reservation.assignedRoomId, roomReservations)
+    reservationsByRoom.set(assignedRoom.id, roomReservations)
   }
 
   return rooms.map((room) => {
     const currentReservations = reservationsByRoom.get(room.id)
     if (!currentReservations?.length) return room
 
-    const checkedInReservation = currentReservations.find((reservation) => reservation.folio === 'Checked In')
-    const reservation = checkedInReservation ?? currentReservations[0]
-    const status: RoomStatus = checkedInReservation || room.status === 'Occupied' ? 'Occupied' : 'Reserved'
+    const checkedInReservation = currentReservations.find((reservation) => (
+      reservation.folio === 'Checked In' && reservation.checkIn.slice(0, 10) <= date
+    ))
+    if (!checkedInReservation && room.status === 'Occupied') return room
+
+    const reservation = checkedInReservation
+      ?? currentReservations
+        .filter((item) => item.checkIn.slice(0, 10) <= date)
+        .sort((first, second) => first.checkIn.localeCompare(second.checkIn))[0]
+      ?? [...currentReservations].sort((first, second) => first.checkIn.localeCompare(second.checkIn))[0]
+    if (!reservation) return room
+
+    const status: RoomStatus = checkedInReservation ? 'Occupied' : 'Reserved'
     return {
       ...room,
       status,

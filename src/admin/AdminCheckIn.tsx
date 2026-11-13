@@ -16,8 +16,15 @@ import {
   X,
 } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
-import { formatReservationDate, reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
+import { currencyMinorUnitScale, formatReservationDate, reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
 import type { Reservation } from './adminReservationsData'
+import {
+  createPaymentIdempotencyKey,
+  createReservation,
+  recordReservationPayment,
+  updateReservationStatus,
+} from './adminReservationsApi'
+import type { PaymentMethod, ReservationDraft, ReservationPayment } from './adminReservationsApi'
 import { getAvailableRoomsForStay } from './adminRoomsData'
 import type { Room } from './adminRoomsData'
 
@@ -47,12 +54,13 @@ function statusClass(status: Reservation['folio']) {
   return 'bg-forest/10 text-forest'
 }
 
-function WalkInDialog({ date, reservations, rooms, onClose, onCreate }: {
+function WalkInDialog({ date, reservations, rooms, inventoryLoading, onClose, onCreate }: {
   date: string
   reservations: Reservation[]
   rooms: Room[]
+  inventoryLoading: boolean
   onClose: () => void
-  onCreate: (reservation: Reservation, room: Room) => void
+  onCreate: (draft: ReservationDraft, payment?: ReservationPayment) => Promise<Reservation>
 }) {
   const [guest, setGuest] = useState('')
   const [email, setEmail] = useState('')
@@ -67,7 +75,9 @@ function WalkInDialog({ date, reservations, rooms, onClose, onCreate }: {
   const [adults, setAdults] = useState('1')
   const [children, setChildren] = useState('0')
   const [amountReceived, setAmountReceived] = useState('0')
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash')
   const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
   const guestCount = (Number(adults) || 0) + (Number(children) || 0)
   const nights = Math.max(1, Math.ceil((new Date(`${checkOut}T12:00:00`).getTime() - new Date(`${checkIn}T12:00:00`).getTime()) / 86400000))
   const stayIsValid = Boolean(checkIn && checkOut > checkIn && guestCount > 0)
@@ -77,10 +87,9 @@ function WalkInDialog({ date, reservations, rooms, onClose, onCreate }: {
   const selectedRoom = availableRooms.find((room) => room.id === roomId)
   const amount = (selectedRoom?.rate ?? 0) * nights
   const paidAmount = Math.min(amount, Math.max(0, Number(amountReceived) || 0))
-  const payment: Reservation['payment'] = paidAmount === 0 ? 'Pending' : paidAmount >= amount ? 'Paid' : 'Partially Paid'
   const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-xs text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
 
-  function submitWalkIn(event: FormEvent<HTMLFormElement>) {
+  async function submitWalkIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!selectedRoom) {
       setError('Choose an available room for this stay.')
@@ -98,26 +107,39 @@ function WalkInDialog({ date, reservations, rooms, onClose, onCreate }: {
       setError('Amount received cannot exceed the stay total.')
       return
     }
-    const reservation: Reservation = {
-      reference: `OPZY-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`,
-      guest: guest.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
-      tier: 'Walk-in',
-      room: selectedRoom.type,
-      assignedRoomId: selectedRoom.id,
-      registeredAt: checkIn,
+    if (!selectedRoom.roomTypeId) {
+      setError('The selected room is missing its room type. Refresh room inventory and try again.')
+      return
+    }
+    const draft: ReservationDraft = {
       checkIn,
       checkOut,
+      roomTypeId: selectedRoom.roomTypeId,
+      assignedRoomId: selectedRoom.id,
+      source: 'walk_in',
+      guestName: guest.trim(),
+      guestEmail: email.trim(),
+      guestPhone: phone.trim(),
       adults: Number(adults),
       children: Number(children),
-      amount,
-      paidAmount,
-      nightlyRate: selectedRoom.rate,
-      payment,
-      folio: 'Checked In',
     }
-    onCreate(reservation, selectedRoom)
+    const initialPayment = paidAmount > 0
+      ? {
+        amountMinor: Math.round(paidAmount * currencyMinorUnitScale(selectedRoom.currency)),
+        method: paymentMethod,
+        idempotencyKey: createPaymentIdempotencyKey(),
+      }
+      : undefined
+
+    setSaving(true)
+    setError('')
+    try {
+      await onCreate(draft, initialPayment)
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : 'Could not create the walk-in guest.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -153,6 +175,13 @@ function WalkInDialog({ date, reservations, rooms, onClose, onCreate }: {
             <section className="space-y-2 border border-stone-200 bg-white p-3">
               <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT RECEIVED</h3>
               <label className="block text-[10px] text-muted">Amount received (₦)<input className={fieldClass} type="number" min="0" max={amount} step="1" value={amountReceived} onChange={(event) => setAmountReceived(event.target.value)} /></label>
+              {paidAmount > 0 && (
+                <label className="block text-[10px] text-muted">Payment method
+                  <select className={fieldClass} value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
+                    <option value="cash">Cash</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option><option value="mobile_money">Mobile money</option><option value="other">Other</option>
+                  </select>
+                </label>
+              )}
               <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Stay total · {nights} {nights === 1 ? 'night' : 'nights'}</span><strong className="text-ink">{reservationCurrency.format(amount)}</strong></div>
               <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Balance due</span><strong className="text-amber-900">{reservationCurrency.format(Math.max(0, amount - paidAmount))}</strong></div>
             </section>
@@ -160,7 +189,7 @@ function WalkInDialog({ date, reservations, rooms, onClose, onCreate }: {
           </div>
           <footer className="flex items-center justify-between gap-3 border-t border-stone-200 bg-white px-5 py-4">
             <button type="button" onClick={onClose} className="px-3 py-2 text-[10px] font-semibold text-muted hover:bg-stone-100">Cancel</button>
-            <button type="submit" disabled={!availableRooms.length} className="inline-flex items-center gap-2 bg-amber-800 px-4 py-2.5 text-[10px] font-semibold tracking-wide text-white hover:bg-amber-900 disabled:cursor-not-allowed disabled:bg-stone-300"><Check aria-hidden="true" className="size-3.5" /> ADD &amp; CHECK IN</button>
+            <button type="submit" disabled={saving || inventoryLoading || !availableRooms.length} className="inline-flex items-center gap-2 bg-amber-800 px-4 py-2.5 text-[10px] font-semibold tracking-wide text-white hover:bg-amber-900 disabled:cursor-not-allowed disabled:bg-stone-300"><Check aria-hidden="true" className="size-3.5" /> {saving ? 'SAVING…' : 'ADD & CHECK IN'}</button>
           </footer>
         </form>
       </section>
@@ -169,20 +198,33 @@ function WalkInDialog({ date, reservations, rooms, onClose, onCreate }: {
 }
 
 export function AdminCheckIn() {
-  const { reservations, setReservations, rooms } = useAdminReservations()
+  const {
+    reservations,
+    setReservations,
+    reservationsLoading,
+    reservationsError,
+    refreshReservations,
+    rooms,
+    roomLoading,
+    roomError,
+  } = useAdminReservations()
   const [selectedDate, setSelectedDate] = useState(todayKey)
   const [activeTab, setActiveTab] = useState<OperationsTab>('Arrivals')
   const [search, setSearch] = useState('')
   const [selectedReference, setSelectedReference] = useState('')
   const [showWalkIn, setShowWalkIn] = useState(false)
+  const [operationError, setOperationError] = useState('')
+  const [pendingActionId, setPendingActionId] = useState('')
   const [showPaymentForm, setShowPaymentForm] = useState(false)
   const [paymentAmount, setPaymentAmount] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash')
   const [paymentError, setPaymentError] = useState('')
+  const [savingPayment, setSavingPayment] = useState(false)
   const query = search.trim().toLowerCase()
 
   const arrivals = useMemo(() => reservations.filter((reservation) => (
     reservation.checkIn <= selectedDate
-    && reservation.checkOut > selectedDate
+    && reservation.checkOut >= selectedDate
     && ['Confirmed', 'Pending Payment'].includes(reservation.folio)
   )), [reservations, selectedDate])
   const departures = useMemo(() => reservations.filter((reservation) => (
@@ -213,28 +255,90 @@ export function AdminCheckIn() {
     setSelectedDate(date.toISOString().slice(0, 10))
   }
 
-  function updateCheckIn(reservation: Reservation) {
-    setReservations((current) => current.map((item) => item.reference === reservation.reference
-      ? { ...item, folio: 'Checked In' }
-      : item))
-    setActiveTab('In-House Guests')
+  async function updateCheckIn(reservation: Reservation) {
+    await changeReservationStatus(reservation, 'checked_in', 'In-House Guests')
   }
 
-  function updateCheckOut(reservation: Reservation) {
-    setReservations((current) => current.map((item) => item.reference === reservation.reference
-      ? { ...item, folio: 'Checked Out' }
-      : item))
-    setActiveTab('Departures')
+  async function updateCheckOut(reservation: Reservation) {
+    await changeReservationStatus(reservation, 'checked_out', 'Departures')
   }
 
-  function createWalkIn(reservation: Reservation) {
-    setReservations((current) => [reservation, ...current])
-    setSelectedReference(reservation.reference)
+  async function changeReservationStatus(reservation: Reservation, status: 'checked_in' | 'checked_out', nextTab: OperationsTab) {
+    const hotelId = sessionStorage.getItem('selectedHotelId') ?? ''
+    if (!hotelId) {
+      setOperationError('Select a hotel before updating a guest folio.')
+      return
+    }
+    if (!reservation.id) {
+      setOperationError('This reservation is missing its database ID and cannot be updated.')
+      return
+    }
+
+    setOperationError('')
+    setPendingActionId(reservation.id)
+    try {
+      const updated = await updateReservationStatus(hotelId, reservation.id, status)
+      setReservations((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setSelectedReference(updated.reference)
+      setActiveTab(nextTab)
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : 'Could not update the guest folio.')
+    } finally {
+      setPendingActionId('')
+    }
+  }
+
+  async function createWalkIn(draft: ReservationDraft, initialPayment?: ReservationPayment) {
+    const hotelId = sessionStorage.getItem('selectedHotelId') ?? ''
+    if (!hotelId) throw new Error('Select a hotel before adding a walk-in guest.')
+
+    setOperationError('')
+    const created = await createReservation(hotelId, draft)
+    setReservations((current) => [created, ...current])
+
+    let checkedIn: Reservation
+    try {
+      if (!created.id) throw new Error('The created reservation is missing its database ID.')
+      checkedIn = await updateReservationStatus(hotelId, created.id, 'checked_in')
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'The check-in could not be completed.'
+      setOperationError(`Walk-in folio ${created.reference} was created, but check-in failed: ${reason}`)
+      setSelectedReference(created.reference)
+      setActiveTab('Arrivals')
+      setShowWalkIn(false)
+      refreshReservations()
+      return created
+    }
+
+    setReservations((current) => current.map((item) => item.id === checkedIn.id ? checkedIn : item))
+    setSelectedReference(checkedIn.reference)
     setShowWalkIn(false)
     setActiveTab('In-House Guests')
+
+    if (initialPayment) {
+      if (!checkedIn.id) {
+        setOperationError(`Guest ${checkedIn.guest} was checked in, but the reservation is missing its database ID, so payment was not recorded.`)
+        return checkedIn
+      }
+      try {
+        const summary = await recordReservationPayment(hotelId, checkedIn.id, initialPayment, checkedIn.currency ?? 'NGN')
+        const paidReservation: Reservation = {
+          ...checkedIn,
+          paidAmount: summary.paidAmount,
+          balanceDue: summary.balanceDue,
+          payment: summary.balanceDue === 0 ? 'Paid' : summary.paidAmount > 0 ? 'Partially Paid' : 'Pending',
+        }
+        setReservations((current) => current.map((item) => item.id === paidReservation.id ? paidReservation : item))
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'The payment could not be recorded.'
+        setOperationError(`Guest ${checkedIn.guest} was checked in, but the payment was not recorded: ${reason}`)
+      }
+    }
+
+    return checkedIn
   }
 
-  function recordPayment(event: FormEvent<HTMLFormElement>) {
+  async function recordPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!selectedReservation) return
 
@@ -245,16 +349,40 @@ export function AdminCheckIn() {
       return
     }
 
-    const paidAmount = reservationPaidAmount(selectedReservation) + amountReceived
-    const payment: Reservation['payment'] = paidAmount >= selectedReservation.amount
-      ? 'Paid'
-      : 'Partially Paid'
-    setReservations((current) => current.map((reservation) => reservation.reference === selectedReservation.reference
-      ? { ...reservation, paidAmount, payment }
-      : reservation))
-    setPaymentAmount('')
+    const hotelId = sessionStorage.getItem('selectedHotelId') ?? ''
+    if (!hotelId || !selectedReservation.id) {
+      setPaymentError(!hotelId ? 'Select a hotel before recording payment.' : 'This reservation is missing its database ID.')
+      return
+    }
+
+    setSavingPayment(true)
     setPaymentError('')
-    setShowPaymentForm(false)
+    try {
+      const summary = await recordReservationPayment(
+        hotelId,
+        selectedReservation.id,
+        {
+          amountMinor: Math.round(amountReceived * currencyMinorUnitScale(selectedReservation.currency ?? 'NGN')),
+          method: paymentMethod,
+          idempotencyKey: createPaymentIdempotencyKey(),
+        },
+        selectedReservation.currency ?? 'NGN',
+      )
+      const updated: Reservation = {
+        ...selectedReservation,
+        paidAmount: summary.paidAmount,
+        balanceDue: summary.balanceDue,
+        payment: summary.balanceDue === 0 ? 'Paid' : summary.paidAmount > 0 ? 'Partially Paid' : 'Pending',
+      }
+      setReservations((current) => current.map((reservation) => reservation.id === updated.id ? updated : reservation))
+      setPaymentAmount('')
+      setPaymentError('')
+      setShowPaymentForm(false)
+    } catch (error) {
+      setPaymentError(error instanceof Error ? error.message : 'Could not record payment.')
+    } finally {
+      setSavingPayment(false)
+    }
   }
 
   const tabs: { label: OperationsTab; count: number }[] = [
@@ -285,6 +413,13 @@ export function AdminCheckIn() {
           <button type="button" onClick={() => setShowWalkIn(true)} className="inline-flex h-9 items-center gap-1.5 bg-amber-900 px-3 text-[10px] font-semibold text-white hover:bg-amber-950"><Plus aria-hidden="true" className="size-3.5" /> Add Check In</button>
         </div>
       </header>
+
+      {(operationError || reservationsError || roomError) && (
+        <p role="alert" className="mb-3 border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-medium text-rose-800">
+          {operationError || reservationsError || roomError}
+        </p>
+      )}
+      {reservationsLoading && <p role="status" className="mb-3 text-[10px] text-muted">Loading reservations…</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-2 xl:grid-cols-4">
         {[
@@ -343,8 +478,8 @@ export function AdminCheckIn() {
                       <td className="px-3 py-3.5 whitespace-nowrap text-ink">{reservation.adults + reservation.children}<span className="mt-1 block text-[9px] text-muted">{reservation.adults} Adults · {reservation.children} Children</span></td>
                       <td className="px-3 py-3.5"><span className={`inline-flex whitespace-nowrap px-2 py-1 text-[8px] font-semibold ${statusClass(reservation.folio)}`}>{reservation.folio}</span><span className="mt-1 block text-[9px] text-muted">{reservation.payment}</span></td>
                       <td className="px-3 py-3.5" onClick={(event) => event.stopPropagation()}>
-                        {reservation.folio === 'Checked In' && <button type="button" onClick={() => updateCheckOut(reservation)} className="whitespace-nowrap border border-forest px-2.5 py-1.5 text-[9px] font-semibold text-forest hover:bg-forest hover:text-white">Check Out</button>}
-                        {['Confirmed', 'Pending Payment'].includes(reservation.folio) && <button type="button" onClick={() => updateCheckIn(reservation)} disabled={reservation.checkIn > selectedDate} className="whitespace-nowrap border border-amber-800 px-2.5 py-1.5 text-[9px] font-semibold text-amber-900 hover:bg-amber-900 hover:text-white disabled:cursor-not-allowed disabled:border-stone-300 disabled:text-stone-400">Check In</button>}
+                        {reservation.folio === 'Checked In' && <button type="button" onClick={() => updateCheckOut(reservation)} disabled={pendingActionId === reservation.id} className="whitespace-nowrap border border-forest px-2.5 py-1.5 text-[9px] font-semibold text-forest hover:bg-forest hover:text-white disabled:cursor-wait disabled:opacity-50">Check Out</button>}
+                        {['Confirmed', 'Pending Payment'].includes(reservation.folio) && <button type="button" onClick={() => updateCheckIn(reservation)} disabled={reservation.checkIn > selectedDate || pendingActionId === reservation.id} className="whitespace-nowrap border border-amber-800 px-2.5 py-1.5 text-[9px] font-semibold text-amber-900 hover:bg-amber-900 hover:text-white disabled:cursor-not-allowed disabled:border-stone-300 disabled:text-stone-400">Check In</button>}
                       </td>
                     </tr>
                   ))}
@@ -390,10 +525,15 @@ export function AdminCheckIn() {
                         <label className="block text-[9px] font-semibold text-ink">AMOUNT RECEIVED (₦)
                           <input autoFocus className="mt-1 w-full border border-stone-200 bg-white px-2.5 py-2 text-[11px] text-ink outline-none focus:border-amber-800" type="number" min="1" max={reservationBalanceDue(selectedReservation)} step="1" value={paymentAmount} onChange={(event) => setPaymentAmount(event.target.value)} required />
                         </label>
+                        <label className="block text-[9px] font-semibold text-ink">PAYMENT METHOD
+                          <select className="mt-1 w-full border border-stone-200 bg-white px-2.5 py-2 text-[11px] text-ink outline-none focus:border-amber-800" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
+                            <option value="cash">Cash</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option><option value="mobile_money">Mobile money</option><option value="other">Other</option>
+                          </select>
+                        </label>
                         {paymentError && <p role="alert" className="text-[9px] text-rose-700">{paymentError}</p>}
                         <div className="flex justify-end gap-2">
-                          <button type="button" onClick={() => { setShowPaymentForm(false); setPaymentError('') }} className="border border-stone-300 px-2.5 py-1.5 text-[9px] font-semibold text-muted hover:bg-stone-50">Cancel</button>
-                          <button type="submit" className="bg-forest px-2.5 py-1.5 text-[9px] font-semibold text-white hover:bg-forest-deep">Save Payment</button>
+                          <button type="button" disabled={savingPayment} onClick={() => { setShowPaymentForm(false); setPaymentError('') }} className="border border-stone-300 px-2.5 py-1.5 text-[9px] font-semibold text-muted hover:bg-stone-50 disabled:opacity-50">Cancel</button>
+                          <button type="submit" disabled={savingPayment} className="bg-forest px-2.5 py-1.5 text-[9px] font-semibold text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-50">{savingPayment ? 'Saving…' : 'Save Payment'}</button>
                         </div>
                       </form>
                     ) : (
@@ -403,9 +543,9 @@ export function AdminCheckIn() {
                 </section>
                 <div className="grid grid-cols-2 gap-2">
                   {selectedReservation.folio === 'Checked In' ? (
-                    <button type="button" onClick={() => updateCheckOut(selectedReservation)} className="col-span-2 inline-flex min-h-10 items-center justify-center gap-2 bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep"><DoorOpen aria-hidden="true" className="size-3.5" /> Complete Check-out</button>
+                    <button type="button" onClick={() => updateCheckOut(selectedReservation)} disabled={pendingActionId === selectedReservation.id} className="col-span-2 inline-flex min-h-10 items-center justify-center gap-2 bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-50"><DoorOpen aria-hidden="true" className="size-3.5" /> Complete Check-out</button>
                   ) : ['Confirmed', 'Pending Payment'].includes(selectedReservation.folio) ? (
-                    <button type="button" onClick={() => updateCheckIn(selectedReservation)} disabled={selectedReservation.checkIn > selectedDate} className="col-span-2 inline-flex min-h-10 items-center justify-center gap-2 bg-amber-900 px-3 py-2 text-[10px] font-semibold text-white hover:bg-amber-950 disabled:cursor-not-allowed disabled:bg-stone-300"><Check aria-hidden="true" className="size-3.5" /> Confirm &amp; Complete Check-in</button>
+                    <button type="button" onClick={() => updateCheckIn(selectedReservation)} disabled={selectedReservation.checkIn > selectedDate || pendingActionId === selectedReservation.id} className="col-span-2 inline-flex min-h-10 items-center justify-center gap-2 bg-amber-900 px-3 py-2 text-[10px] font-semibold text-white hover:bg-amber-950 disabled:cursor-not-allowed disabled:bg-stone-300"><Check aria-hidden="true" className="size-3.5" /> Confirm &amp; Complete Check-in</button>
                   ) : (
                     <span className="col-span-2 py-2 text-center text-[9px] text-muted">This folio has no pending front desk action.</span>
                   )}
@@ -418,7 +558,7 @@ export function AdminCheckIn() {
           )}
         </aside>
       </div>
-      {showWalkIn && <WalkInDialog date={selectedDate} reservations={reservations} rooms={rooms} onClose={() => setShowWalkIn(false)} onCreate={createWalkIn} />}
+      {showWalkIn && <WalkInDialog date={selectedDate} reservations={reservations} rooms={rooms} inventoryLoading={reservationsLoading || roomLoading} onClose={() => setShowWalkIn(false)} onCreate={createWalkIn} />}
     </section>
   )
 }

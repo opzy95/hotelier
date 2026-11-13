@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { BedDouble, CalendarDays, CircleCheck, Download, Search, Wallet } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
 import {
@@ -9,7 +9,7 @@ import {
   reservationOutstandingAmount,
   reservationPaidAmount,
 } from './adminReservationsData'
-import { getRoomStatusCounts } from './adminRoomsData'
+import { getRoomStatusCounts, getRoomStatusesForDate } from './adminRoomsData'
 import type { Reservation } from './adminReservationsData'
 
 type StayPeriod = 'All Stays' | 'This Month' | 'Next 30 Days' | 'Past Stays'
@@ -48,13 +48,17 @@ function exportReport(rows: Reservation[]) {
 }
 
 export function AdminReports() {
-  const { reservations, rooms } = useAdminReservations()
+  const { reservations, reservationsLoading, reservationsError, refreshReservations, rooms } = useAdminReservations()
   const [period, setPeriod] = useState<StayPeriod>('All Stays')
   const [search, setSearch] = useState('')
   const today = dateKey(new Date())
   const endOfNext30Days = new Date()
   endOfNext30Days.setDate(endOfNext30Days.getDate() + 30)
   const next30DayKey = dateKey(endOfNext30Days)
+
+  useEffect(() => {
+    refreshReservations()
+  }, [refreshReservations])
 
   const periodReservations = useMemo(() => reservations.filter((reservation) => {
     if (period === 'All Stays') return true
@@ -72,7 +76,7 @@ export function AdminReports() {
     !query || `${reservation.reference} ${reservation.guest} ${reservation.room} ${reservation.assignedRoomId ?? ''}`.toLowerCase().includes(query)
   )), [periodReservations, query])
 
-  const operationalRooms = rooms.filter((room) => room.active)
+  const operationalRooms = getRoomStatusesForDate(rooms, reservations, today).filter((room) => room.active)
   const roomCounts = getRoomStatusCounts(operationalRooms)
   const currentlyStaying = reservations.filter((reservation) => reservation.folio === 'Checked In').length
   const upcoming = periodReservations.filter((reservation) => (
@@ -106,6 +110,14 @@ export function AdminReports() {
           <button type="button" onClick={() => exportReport(filteredReservations)} className="inline-flex h-9 items-center gap-1.5 border border-stone-300 bg-white px-3 text-[10px] font-semibold text-ink hover:bg-stone-50"><Download aria-hidden="true" className="size-3.5" /> Export CSV</button>
         </div>
       </header>
+
+      {reservationsError && (
+        <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">
+          <span>Room status may be out of date: {reservationsError}</span>
+          <button type="button" onClick={refreshReservations} className="font-semibold underline underline-offset-2">Retry</button>
+        </div>
+      )}
+      {reservationsLoading && <p role="status" className="mb-3 text-[10px] text-muted">Syncing reservation statuses…</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-2 xl:grid-cols-4">
         <article className="border border-stone-200 bg-white p-3.5 shadow-sm sm:p-4">

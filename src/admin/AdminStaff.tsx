@@ -3,6 +3,8 @@ import type { FormEvent } from 'react'
 import { BriefcaseBusiness, Check, CircleCheck, Clock3, Mail, Pencil, Phone, Plus, Search, UsersRound, X } from 'lucide-react'
 import { useAdminStaff } from './AdminStaffContext'
 import type { Department, StaffDraft, StaffMember, StaffStatus } from './adminStaffData'
+import { createDepartment, createStaff, updateStaff } from './adminStaffApi'
+import type { DepartmentDraft } from './adminStaffApi'
 
 type StaffFilter = 'All Staff' | StaffStatus
 
@@ -12,11 +14,13 @@ function statusStyle(status: StaffStatus) {
   return 'border-stone-200 bg-stone-100 text-stone-600'
 }
 
-function StaffForm({ member, departments, onClose, onSave }: {
+function StaffForm({ member, departments, onClose, onSave, saving, error }: {
   member?: StaffMember
   departments: Department[]
   onClose: () => void
   onSave: (draft: StaffDraft) => void
+  saving: boolean
+  error: string
 }) {
   const [name, setName] = useState(member?.name ?? '')
   const [role, setRole] = useState(member?.role ?? '')
@@ -56,10 +60,53 @@ function StaffForm({ member, departments, onClose, onSave }: {
                 <select className={fieldClass} value={status} onChange={(event) => setStatus(event.target.value as StaffStatus)}>{(['On Duty', 'Off Duty', 'On Leave'] as StaffStatus[]).map((option) => <option key={option}>{option}</option>)}</select>
               </label>
             </div>
+            {error && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">{error}</p>}
           </div>
           <footer className="flex justify-end gap-2 border-t border-stone-200 bg-white p-4">
-            <button type="button" onClick={onClose} className="border border-stone-300 px-4 py-2.5 text-[10px] font-semibold text-ink hover:bg-stone-50">Cancel</button>
-            <button type="submit" className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep"><Check aria-hidden="true" className="size-3.5" /> {member ? 'Save Profile' : 'Add Staff Member'}</button>
+            <button type="button" onClick={onClose} disabled={saving} className="border border-stone-300 px-4 py-2.5 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={saving || !departments.length} className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-50"><Check aria-hidden="true" className="size-3.5" /> {saving ? 'Saving…' : member ? 'Save Profile' : 'Add Staff Member'}</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  )
+}
+
+function DepartmentForm({ onClose, onSave, saving, error }: {
+  onClose: () => void
+  onSave: (draft: DepartmentDraft) => void
+  saving: boolean
+  error: string
+}) {
+  const [name, setName] = useState('')
+  const [shortName, setShortName] = useState('')
+  const [description, setDescription] = useState('')
+  const [lead, setLead] = useState('')
+  const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-xs text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    onSave({ name: name.trim(), shortName: shortName.trim(), description: description.trim(), lead: lead.trim() })
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex justify-end bg-black/50" onMouseDown={onClose}>
+      <section role="dialog" aria-modal="true" aria-labelledby="department-form-title" className="flex h-full w-full max-w-[440px] flex-col bg-paper shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="flex items-start justify-between border-b border-stone-200 bg-white px-5 py-4">
+          <div><p className="text-[10px] font-semibold tracking-[0.15em] text-amber-800">TEAM STRUCTURE</p><h2 id="department-form-title" className="mt-1 font-display text-xl text-ink">Add Department</h2><p className="mt-1 text-[11px] text-muted">Create the department before assigning staff to it.</p></div>
+          <button type="button" onClick={onClose} aria-label="Close department form" className="grid size-8 place-items-center text-muted hover:bg-stone-100"><X aria-hidden="true" className="size-4" /></button>
+        </header>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <div className="flex-1 space-y-4 overflow-y-auto p-5">
+            <label className="block text-[10px] font-semibold tracking-wide text-ink">DEPARTMENT NAME *<input className={fieldClass} value={name} onChange={(event) => setName(event.target.value)} required /></label>
+            <label className="block text-[10px] font-semibold tracking-wide text-ink">SHORT NAME *<input className={fieldClass} value={shortName} onChange={(event) => setShortName(event.target.value)} maxLength={8} placeholder="e.g. FO" required /></label>
+            <label className="block text-[10px] font-semibold tracking-wide text-ink">DESCRIPTION<input className={fieldClass} value={description} onChange={(event) => setDescription(event.target.value)} /></label>
+            <label className="block text-[10px] font-semibold tracking-wide text-ink">DEPARTMENT LEAD<input className={fieldClass} value={lead} onChange={(event) => setLead(event.target.value)} /></label>
+            {error && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">{error}</p>}
+          </div>
+          <footer className="flex justify-end gap-2 border-t border-stone-200 bg-white p-4">
+            <button type="button" onClick={onClose} disabled={saving} className="border border-stone-300 px-4 py-2.5 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={saving} className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-50"><Check aria-hidden="true" className="size-3.5" /> {saving ? 'Saving…' : 'Add Department'}</button>
           </footer>
         </form>
       </section>
@@ -68,13 +115,17 @@ function StaffForm({ member, departments, onClose, onSave }: {
 }
 
 export function AdminStaff() {
-  const { staff, setStaff, departments } = useAdminStaff()
+  const { staff, setStaff, departments, setDepartments, loading, error, refresh } = useAdminStaff()
+  const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<StaffFilter>('All Staff')
   const [departmentFilter, setDepartmentFilter] = useState('All Departments')
   const [selectedId, setSelectedId] = useState(staff[0]?.id ?? '')
   const [editingMember, setEditingMember] = useState<StaffMember | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [showDepartmentForm, setShowDepartmentForm] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [actionError, setActionError] = useState('')
   const query = search.trim().toLowerCase()
 
   const filteredStaff = useMemo(() => staff.filter((member) => {
@@ -88,17 +139,53 @@ export function AdminStaff() {
   const onDutyCount = staff.filter((member) => member.status === 'On Duty').length
   const onLeaveCount = staff.filter((member) => member.status === 'On Leave').length
 
-  function saveStaff(draft: StaffDraft, member?: StaffMember) {
-    if (member) {
-      setStaff((current) => current.map((item) => item.id === member.id ? { ...item, ...draft } : item))
-      setSelectedId(member.id)
-    } else {
-      const newMember: StaffMember = { ...draft, id: `OPZY-STF-${String(Date.now()).slice(-6)}`, joinedAt: new Date().toISOString().slice(0, 10) }
-      setStaff((current) => [newMember, ...current])
-      setSelectedId(newMember.id)
+  async function saveStaff(draft: StaffDraft, member?: StaffMember) {
+    if (!hotelId) {
+      setActionError('Select a hotel before saving staff.')
+      return
     }
-    setShowAddForm(false)
-    setEditingMember(null)
+    if (!departments.some((department) => department.id === draft.departmentId)) {
+      setActionError('Choose a department that exists before saving this staff member.')
+      return
+    }
+
+    setSaving(true)
+    setActionError('')
+    try {
+      const saved = member
+        ? await updateStaff(hotelId, member.id, draft)
+        : await createStaff(hotelId, draft)
+      setStaff((current) => member
+        ? current.map((item) => item.id === saved.id ? saved : item)
+        : [saved, ...current])
+      setSelectedId(saved.id)
+      setShowAddForm(false)
+      setEditingMember(null)
+    } catch (saveError) {
+      setActionError(saveError instanceof Error ? saveError.message : 'Could not save the staff member.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveDepartment(draft: DepartmentDraft) {
+    if (!hotelId) {
+      setActionError('Select a hotel before adding a department.')
+      return
+    }
+
+    setSaving(true)
+    setActionError('')
+    try {
+      const department = await createDepartment(hotelId, draft)
+      setDepartments((current) => [department, ...current])
+      setDepartmentFilter('All Departments')
+      setShowDepartmentForm(false)
+    } catch (saveError) {
+      setActionError(saveError instanceof Error ? saveError.message : 'Could not add the department.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const departmentStats = departments.map((department) => {
@@ -117,8 +204,19 @@ export function AdminStaff() {
     <section className="mx-auto max-w-[1600px]">
       <header className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div><p className="text-[10px] font-semibold tracking-[0.17em] text-amber-800">PEOPLE &amp; OPERATIONS</p><h1 className="mt-1 font-display text-2xl text-ink sm:text-3xl">Staff &amp; Departments</h1><p className="mt-1 max-w-2xl text-[11px] text-muted sm:text-[13px]">Manage staff profiles, department assignments, and daily availability.</p></div>
-        <button type="button" onClick={() => setShowAddForm(true)} className="inline-flex h-9 items-center justify-center gap-1.5 bg-forest px-3 text-[10px] font-semibold text-white hover:bg-forest-deep"><Plus aria-hidden="true" className="size-3.5" /> Add Staff Member</button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => { setActionError(''); setShowDepartmentForm(true) }} disabled={loading || saving} className="inline-flex h-9 items-center justify-center gap-1.5 border border-stone-300 bg-white px-3 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-50"><Plus aria-hidden="true" className="size-3.5" /> Add Department</button>
+          <button type="button" onClick={() => { setActionError(''); setShowAddForm(true) }} disabled={loading || saving || !departments.length} title={!departments.length ? 'Add a department before adding staff' : undefined} className="inline-flex h-9 items-center justify-center gap-1.5 bg-forest px-3 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-not-allowed disabled:opacity-50"><Plus aria-hidden="true" className="size-3.5" /> Add Staff Member</button>
+        </div>
       </header>
+
+      {(error || actionError) && (
+        <div role="alert" className="mb-4 flex items-center justify-between gap-3 border border-rose-200 bg-rose-50 px-3 py-2.5 text-[10px] text-rose-800">
+          <span>{actionError || error}</span>
+          {error && <button type="button" onClick={refresh} className="shrink-0 font-semibold underline underline-offset-2">Retry</button>}
+        </div>
+      )}
+      {loading && <p role="status" className="mb-3 text-[10px] text-muted">Loading staff and departments…</p>}
 
       <div className="mb-4 grid grid-cols-2 gap-2 xl:grid-cols-4">
         {[
@@ -138,6 +236,7 @@ export function AdminStaff() {
               <h3 className="mt-2 text-[11px] font-semibold text-ink">{department.name}</h3><p className="mt-1 text-[9px] leading-4 text-muted">{department.description}</p><p className="mt-2 text-[9px] text-muted">Department lead · <strong className="font-medium text-ink">{department.lead}</strong></p>
             </button>
           ))}
+          {!departments.length && !loading && <p className="border border-dashed border-stone-300 p-4 text-[10px] text-muted sm:col-span-2 xl:col-span-3">No departments yet. Add a department before adding staff.</p>}
         </div>
       </section>
 
@@ -182,8 +281,9 @@ export function AdminStaff() {
         </div>
       </aside>}
 
-      {showAddForm && <StaffForm departments={departments} onClose={() => setShowAddForm(false)} onSave={(draft) => saveStaff(draft)} />}
-      {editingMember && <StaffForm member={editingMember} departments={departments} onClose={() => setEditingMember(null)} onSave={(draft) => saveStaff(draft, editingMember)} />}
+      {showDepartmentForm && <DepartmentForm onClose={() => setShowDepartmentForm(false)} onSave={saveDepartment} saving={saving} error={actionError} />}
+      {showAddForm && <StaffForm departments={departments} onClose={() => setShowAddForm(false)} onSave={(draft) => { void saveStaff(draft) }} saving={saving} error={actionError} />}
+      {editingMember && <StaffForm member={editingMember} departments={departments} onClose={() => setEditingMember(null)} onSave={(draft) => { void saveStaff(draft, editingMember) }} saving={saving} error={actionError} />}
     </section>
   )
 }
