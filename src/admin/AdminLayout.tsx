@@ -46,10 +46,27 @@ const sectionTitles: Record<string, string> = {
   settings: 'Settings',
 }
 
-function NavigationLinks({ onNavigate }: { onNavigate: () => void }) {
+function NavigationLinks({ onNavigate, permissions, isManager }: { onNavigate: () => void; permissions: string[]; isManager: boolean }) {
+  const receptionistPermissions: Record<string, string[]> = {
+    reservations: ['reservations.view'],
+    rooms: ['rooms.availability.view'],
+    guests: ['guests.view', 'guests.create'],
+    'check-in': ['reservations.view', 'reservations.check_in', 'reservations.check_out', 'reservations.create'],
+  }
+  const visibleNavigation = isManager
+    ? primaryNavigation
+    : primaryNavigation.filter(({ path }) => {
+      const required = receptionistPermissions[path] ?? []
+      if (path === 'check-in') {
+        return permissions.includes('reservations.view')
+          && required.slice(1).some((permission) => permissions.includes(permission))
+      }
+      return required.some((permission) => permissions.includes(permission))
+    })
+
   return (
     <>
-      {primaryNavigation.map(({ label, path, icon: Icon, notification }) => (
+      {visibleNavigation.map(({ label, path, icon: Icon, notification }) => (
         <NavLink
           key={path}
           to={`/dashboard/${path}`}
@@ -65,8 +82,8 @@ function NavigationLinks({ onNavigate }: { onNavigate: () => void }) {
           {notification && <span className="size-1.5 rounded-full bg-champagne" />}
         </NavLink>
       ))}
-      <p className="mb-2 mt-7 px-3 text-[9px] font-semibold tracking-[0.16em] text-white/40">SYSTEM SANCTUARY</p>
-      {secondaryNavigation.map(({ label, path, icon: Icon }) => (
+      {isManager && <p className="mb-2 mt-7 px-3 text-[9px] font-semibold tracking-[0.16em] text-white/40">SYSTEM SANCTUARY</p>}
+      {isManager && secondaryNavigation.map(({ label, path, icon: Icon }) => (
         <NavLink
           key={path}
           to={`/dashboard/${path}`}
@@ -90,7 +107,8 @@ export function AdminLayout() {
   const [now] = useState(() => new Date())
   const [isSigningOut, setIsSigningOut] = useState(false)
   const navigate = useNavigate()
-  const { hotelName, managerName, managerRole } = useHotelSession()
+  const { hotelName, userName, managerRole, permissions } = useHotelSession()
+  const isManager = managerRole.toLowerCase() === 'manager'
   const location = useLocation()
   const pageName = location.pathname.split('/').pop()?.replaceAll('-', ' ') ?? 'overview'
   const title = pageName.replace(/\b\w/g, (letter) => letter.toUpperCase())
@@ -131,26 +149,26 @@ export function AdminLayout() {
         sidebarOpen ? 'translate-x-0' : '-translate-x-full'
       }`} aria-label="Admin navigation">
         <Link
-          to="/dashboard/overview"
+          to="/dashboard"
           onClick={closeSidebar}
           className="flex min-h-[92px] flex-col justify-center gap-2 border-b border-white/10 px-5 no-underline"
         >
           <span className="truncate font-display text-sm tracking-wide text-white">{hotelName}</span>
           <span className="flex gap-2 text-[8px] font-semibold tracking-[0.12em] text-white/45">
-            <span className="border border-champagne/50 px-1 py-0.5 text-champagne">MANAGER PORTAL</span>
+            <span className="border border-champagne/50 px-1 py-0.5 text-champagne">{isManager ? 'MANAGER PORTAL' : 'RECEPTIONIST WORKSPACE'}</span>
             <span className="truncate">{managerRole}</span>
           </span>
         </Link>
 
         <nav className="flex-1 overflow-y-auto px-2 py-4">
-          <p className="mb-2 px-3 text-[9px] font-semibold tracking-[0.16em] text-white/40">EXECUTIVE OPERATIONS</p>
-          <NavigationLinks onNavigate={closeSidebar} />
+          <p className="mb-2 px-3 text-[9px] font-semibold tracking-[0.16em] text-white/40">{isManager ? 'EXECUTIVE OPERATIONS' : 'FRONT DESK OPERATIONS'}</p>
+          <NavigationLinks onNavigate={closeSidebar} permissions={permissions} isManager={isManager} />
         </nav>
 
         <div className="flex min-h-[62px] items-center gap-2 border-t border-white/10 px-3">
-          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-champagne/70 bg-champagne/10 text-xs font-semibold text-champagne">{managerName.split(/\s+/).slice(0, 2).map((part) => part[0] ?? '').join('').toUpperCase()}</span>
+          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-champagne/70 bg-champagne/10 text-xs font-semibold text-champagne">{userName.split(/\s+/).slice(0, 2).map((part) => part[0] ?? '').join('').toUpperCase()}</span>
           <span className="grid min-w-0 flex-1 gap-0.5">
-            <strong className="truncate text-[11px] font-medium">{managerName}</strong>
+            <strong className="truncate text-[11px] font-medium">{userName}</strong>
             <small className="text-[8px] tracking-wide text-white/50">{managerRole}</small>
           </span>
           <button type="button" onClick={() => { void signOut() }} disabled={isSigningOut} aria-label="Sign out of hotel portal" title="Sign out" className="grid size-8 shrink-0 place-items-center text-white/50 transition-colors hover:text-white disabled:opacity-40"><LogOut aria-hidden="true" className="size-3.5" /></button>
@@ -178,13 +196,13 @@ export function AdminLayout() {
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 truncate text-[9px] font-semibold tracking-[0.12em] text-muted">
-            <span className="hidden sm:inline">MANAGER PORTAL</span>
+            <span className="hidden sm:inline">{isManager ? 'MANAGER PORTAL' : 'RECEPTIONIST WORKSPACE'}</span>
             <span aria-hidden="true" className="hidden sm:inline">›</span>
             <span className="hidden md:inline">OPERATIONAL FOLIO</span>
             <span aria-hidden="true" className="hidden md:inline">›</span>
             <strong className="truncate text-ink">{title.toUpperCase()}</strong>
           </div>
-          <p className="mt-1 truncate text-[10px] text-muted">{hotelName} · Welcome back, {managerName}</p>
+          <p className="mt-1 truncate text-[10px] text-muted">{hotelName} · Welcome back, {userName}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-4">
           <span className="hidden items-center gap-2 text-[10px] text-muted xl:flex">

@@ -3,8 +3,9 @@ import type { ReactNode } from 'react'
 
 export type HotelSessionIdentity = {
   hotelName: string
-  managerName: string
+  userName: string
   managerRole: string
+  permissions: string[]
 }
 
 const HotelSessionContext = createContext<HotelSessionIdentity | null>(null)

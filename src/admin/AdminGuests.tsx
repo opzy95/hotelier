@@ -22,10 +22,10 @@ import {
   X,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { fetchAllReservations } from './adminReservationsApi'
 import { fetchHotelGuestProfiles, updateHotelGuestProfile } from './adminGuestsApi'
 import type { HotelGuestProfile } from './adminGuestsApi'
 import { useAdminReservations } from './AdminReservationsContext'
+import { useHotelSession } from './HotelSessionContext'
 import {
   formatReservationDate,
   reservationBalanceDue,
@@ -269,13 +269,14 @@ function ExtendStayDialog({ reservation, onClose, onSave }: {
   )
 }
 
-function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExtendStay }: {
+function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExtendStay, canManage }: {
   guest: Guest
   reservations: Reservation[]
   inventory: Room[]
   onEdit: () => void
   onClose: () => void
   onExtendStay: () => void
+  canManage: boolean
 }) {
   const guestReservations = reservationsForGuest(guest, reservations)
   const completedStays = guestReservations.filter((reservation) => reservation.folio === 'Checked Out')
@@ -328,12 +329,12 @@ function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExt
               </div>
             ))}
           </div>
-          <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-            <div className="bg-forest p-2.5 text-white">
+          <div className={`mt-1.5 grid ${canManage ? 'grid-cols-2' : 'grid-cols-1'} gap-1.5`}>
+            {canManage && <div className="bg-forest p-2.5 text-white">
               <span className="text-[9px] tracking-wide text-white/60">LIFETIME REVENUE (NGN)</span>
               <strong className="mt-1 block font-display text-sm text-champagne">{reservationCurrency.format(lifetimeRevenue)}</strong>
               <span className="text-[9px] text-white/60">Paid guest folios</span>
-            </div>
+            </div>}
             <div className="border border-stone-100 bg-paper p-2.5">
               <span className="text-[9px] tracking-wide text-muted">NEXT RESERVATION</span>
               {nextReservation ? (
@@ -360,10 +361,10 @@ function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExt
                     <span className={`shrink-0 px-1.5 py-0.5 text-[9px] ${reservation.folio === 'Checked In' ? 'bg-amber-50 text-amber-900' : reservation.folio === 'Cancelled' ? 'bg-rose-50 text-rose-800' : 'bg-stone-100 text-stone-600'}`}>{reservation.folio}</span>
                   </div>
                   <p className="mt-1 text-[10px] text-ink">{reservation.room} · {roomDisplayName(reservation.assignedRoomId, inventory)} · {formatReservationDate(reservation.checkIn)} – {formatReservationDate(reservation.checkOut)}</p>
-                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[9px]">
+                  {canManage && <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[9px]">
                     <span>Paid {reservationCurrency.format(reservationPaidAmount(reservation))}</span>
                     <span className="border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] font-bold text-amber-950">Remaining balance: {reservationCurrency.format(reservationBalanceDue(reservation))}</span>
-                  </div>
+                  </div>}
                 </article>
               ))}
             </div>
@@ -371,24 +372,25 @@ function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExt
         </section>
       </div>
       <footer className="grid grid-cols-2 gap-1.5 border-t border-stone-100 bg-paper p-2.5">
-        <button type="button" onClick={onEdit} className="inline-flex items-center justify-center gap-1.5 bg-amber-900 px-2 py-2.5 text-[9px] font-semibold text-white hover:bg-amber-950"><Pencil aria-hidden="true" className="size-3" /> Edit Guest Profile</button>
-        {activeReservation ? (
+        {canManage && <button type="button" onClick={onEdit} className="inline-flex items-center justify-center gap-1.5 bg-amber-900 px-2 py-2.5 text-[9px] font-semibold text-white hover:bg-amber-950"><Pencil aria-hidden="true" className="size-3" /> Edit Guest Profile</button>}
+        {canManage && activeReservation ? (
           <button type="button" onClick={onExtendStay} className="inline-flex items-center justify-center gap-1.5 border border-stone-300 bg-white px-2 py-2.5 text-[9px] font-semibold text-ink hover:bg-stone-50"><CalendarDays aria-hidden="true" className="size-3" /> Edit / Extend Stay</button>
         ) : nextReservation ? (
           <Link to="/dashboard/reservations" className="inline-flex items-center justify-center gap-1.5 border border-stone-300 bg-white px-2 py-2.5 text-[9px] font-semibold text-ink hover:bg-stone-50"><CalendarDays aria-hidden="true" className="size-3" /> View Reservation</Link>
-        ) : (
+        ) : canManage ? (
           <Link to="/dashboard/reservations" className="inline-flex items-center justify-center gap-1.5 border border-stone-300 bg-white px-2 py-2.5 text-[9px] font-semibold text-ink hover:bg-stone-50"><CalendarDays aria-hidden="true" className="size-3" /> Create Reservation</Link>
-        )}
+        ) : null}
       </footer>
     </aside>
   )
 }
 
 export function AdminGuests() {
-  const { rooms } = useAdminReservations()
+  const { rooms, reservations, setReservations } = useAdminReservations()
+  const { managerRole } = useHotelSession()
+  const canManage = managerRole.toLowerCase() === 'manager'
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
-  const [reservations, setReservations] = useState<Reservation[]>([])
-  const [guests, setGuests] = useState<Guest[]>([])
+  const [profiles, setProfiles] = useState<HotelGuestProfile[]>([])
   const [guestsLoading, setGuestsLoading] = useState(Boolean(hotelId))
   const [guestsError, setGuestsError] = useState('')
   const [guestSaving, setGuestSaving] = useState(false)
@@ -407,13 +409,11 @@ export function AdminGuests() {
     if (!hotelId) return
 
     let cancelled = false
-    void Promise.all([fetchHotelGuestProfiles(hotelId), fetchAllReservations(hotelId)])
-      .then(([profiles, result]) => {
+    void fetchHotelGuestProfiles(hotelId)
+      .then((loadedProfiles) => {
         if (cancelled) return
-        setReservations(result.reservations)
-        const loadedGuests = createGuests(profiles, result.reservations)
-        setGuests(loadedGuests)
-        setSelectedId(loadedGuests[0]?.key ?? '')
+        setProfiles(loadedProfiles)
+        setSelectedId(loadedProfiles[0]?.id ?? '')
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -426,7 +426,7 @@ export function AdminGuests() {
   }, [hotelId])
 
   const guestLoadError = !hotelId ? 'Select a hotel to load its guests.' : guestsError
-  const registeredGuests = guests
+  const registeredGuests = useMemo(() => createGuests(profiles, reservations), [profiles, reservations])
   const countryOptions = Array.from(new Set(registeredGuests.map((guest) => guest.country).filter(Boolean))).sort()
   const tierOptions = Array.from(new Set(registeredGuests.map((guest) => guest.tier).filter(Boolean))).sort()
   const selectedGuest = registeredGuests.find((guest) => guest.key === selectedId)
@@ -472,9 +472,9 @@ export function AdminGuests() {
     try {
       await updateHotelGuestProfile(hotelId, selectedGuest.id, changes)
       const countryCode = countryCodeFor(draft.country)
-      setGuests((current) => current.map((guest) => guest.key === selectedGuest.key
-        ? { ...guest, ...draft, countryCode: countryCode || guest.countryCode }
-        : guest))
+      setProfiles((current) => current.map((profile) => profile.id === selectedGuest.id
+        ? { ...profile, country: draft.country, tier: draft.tier, countryCode: countryCode || profile.countryCode }
+        : profile))
       setDialog(null)
     } catch (error: unknown) {
       setGuestSaveError(error instanceof Error ? error.message : 'Could not update the guest profile.')
@@ -510,7 +510,7 @@ export function AdminGuests() {
           <p className="mt-1 max-w-2xl text-[12px] text-muted sm:text-[13px]">View guest profiles, manage guest information, and monitor reservation history across Victoria Island wings.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => exportGuests(filteredGuests)} className="inline-flex items-center justify-center gap-2 border border-stone-300 bg-white px-3 py-2.5 text-[11px] font-semibold text-ink hover:bg-stone-50"><ArrowDownToLine aria-hidden="true" className="size-3.5" /> Export Guest Registry (.CSV)</button>
+          {canManage && <button type="button" onClick={() => exportGuests(filteredGuests)} className="inline-flex items-center justify-center gap-2 border border-stone-300 bg-white px-3 py-2.5 text-[11px] font-semibold text-ink hover:bg-stone-50"><ArrowDownToLine aria-hidden="true" className="size-3.5" /> Export Guest Registry (.CSV)</button>}
         </div>
       </header>
 
@@ -620,7 +620,7 @@ export function AdminGuests() {
             </div>
           </footer>
         </section>
-        {selectedGuest && <GuestInspector guest={selectedGuest} reservations={reservations} inventory={rooms} onEdit={() => { setGuestSaveError(''); setDialog('edit') }} onExtendStay={() => setDialog('extend')} onClose={() => setSelectedId('')} />}
+        {selectedGuest && <GuestInspector guest={selectedGuest} reservations={reservations} inventory={rooms} onEdit={() => { setGuestSaveError(''); setDialog('edit') }} onExtendStay={() => setDialog('extend')} onClose={() => setSelectedId('')} canManage={canManage} />}
       </div>
 
       <footer className="mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-stone-200 py-3 text-[9px] text-muted">
@@ -630,7 +630,7 @@ export function AdminGuests() {
         <span className="ml-auto hidden items-center gap-1 font-mono sm:inline-flex"><Globe2 aria-hidden="true" className="size-3" /> SYSTEM SECURE · ENCRYPTED AUDIT FOLIO V4.1</span>
       </footer>
 
-      {dialog === 'edit' && selectedGuest && (
+      {canManage && dialog === 'edit' && selectedGuest && (
         <GuestDialog
           guest={selectedGuest}
           onClose={() => setDialog(null)}
@@ -639,7 +639,7 @@ export function AdminGuests() {
           error={guestSaveError}
         />
       )}
-      {dialog === 'extend' && selectedInHouseReservation && (
+      {canManage && dialog === 'extend' && selectedInHouseReservation && (
         <ExtendStayDialog reservation={selectedInHouseReservation} onClose={() => setDialog(null)} onSave={saveStayExtension} />
       )}
     </section>

@@ -98,6 +98,11 @@ export function AdminReservationsProvider({ children }: { children: ReactNode })
     setReservationReloadKey((current) => current + 1)
   }, [])
 
+  useEffect(() => {
+    const intervalId = window.setInterval(refreshReservations, 30_000)
+    return () => window.clearInterval(intervalId)
+  }, [refreshReservations])
+
   return (
     <AdminReservationsContext.Provider value={{
       reservations,

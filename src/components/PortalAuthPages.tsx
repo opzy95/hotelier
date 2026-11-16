@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Building2, Eye, EyeOff, Hotel, LockKeyhole, Mail, MapPin, ShieldCheck, Sparkles, UserRound } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ApiError, apiRequest, clearAccessToken, setAccessToken } from '../api'
 import type { HotelMembership, PlatformLoginResponse, PlatformProfileResponse } from '../api'
 import heroImage from '../img/Opzy Luxury Hotel infinity lagoon pool at twilight in Victoria Island.png'
@@ -114,10 +114,10 @@ export function HotelAdminLoginPage() {
       })
       setAccessToken(token)
       const profile = await apiRequest<PlatformProfileResponse>('/auth/me')
-      const memberships = profile.memberships.filter(({ role }) => role === 'manager')
+      const memberships = profile.memberships.filter(({ role }) => ['manager', 'receptionist'].includes(role.toLowerCase()))
       if (memberships.length === 0) {
         clearAccessToken()
-        setNotice('This account does not have manager access to a hotel.')
+        setNotice('This account does not have access to a hotel workspace.')
         return
       }
 
@@ -145,17 +145,17 @@ export function HotelAdminLoginPage() {
 
   function continueToHotel(hotelId: string) {
     sessionStorage.setItem('selectedHotelId', hotelId)
-    navigate('/dashboard/overview', { replace: true })
+    navigate('/dashboard', { replace: true })
   }
 
   return (
-    <PortalFrame eyebrow="HOTEL TEAM PORTAL" title="Welcome back" description="Sign in to manage your hotel’s day-to-day operations." previewOnly={false}>
+    <PortalFrame eyebrow="HOTEL TEAM PORTAL" title="Welcome back" description="Sign in to your hotel workspace." previewOnly={false}>
       {hotelChoices.length > 0 ? (
         <div className="space-y-3">
           <p className="text-xs text-muted">Choose the hotel you want to manage.</p>
           {hotelChoices.map((hotel) => (
             <button key={hotel.hotelId} type="button" onClick={() => continueToHotel(hotel.hotelId)} className="flex min-h-12 w-full items-center justify-between border border-stone-200 bg-white px-4 text-left text-xs font-semibold text-ink transition-colors hover:border-forest">
-              <span>{hotel.hotelName}</span><ArrowRight aria-hidden="true" className="size-4 text-forest" />
+              <span>{hotel.hotelName}<small className="mt-1 block text-[9px] font-normal uppercase tracking-wide text-muted">{hotel.role.replaceAll('_', ' ')}</small></span><ArrowRight aria-hidden="true" className="size-4 text-forest" />
             </button>
           ))}
           <button type="button" onClick={() => { clearAccessToken(); sessionStorage.removeItem('selectedHotelId'); setHotelChoices([]); sessionStorage.removeItem('pendingVerificationEmail') }} className="w-full py-2 text-[10px] font-semibold text-forest underline-offset-2 hover:underline">Use another account</button>
@@ -177,6 +177,78 @@ export function HotelAdminLoginPage() {
           <div className="border-t border-stone-200 pt-4 text-center">
             <p className="text-[10px] text-muted">New to the platform? <Link to="/hotel/register" className="font-semibold text-forest underline-offset-2 hover:underline">Register your hotel</Link></p>
           </div>
+        </form>
+      )}
+    </PortalFrame>
+  )
+}
+
+export function StaffInvitationAcceptancePage() {
+  const [searchParams] = useSearchParams()
+  const token = searchParams.get('token')?.trim() ?? ''
+  const hotelId = searchParams.get('hotelId')?.trim() ?? ''
+  const invitationEmail = searchParams.get('email')?.trim() ?? ''
+  const [notice, setNotice] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isComplete, setIsComplete] = useState(false)
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setNotice('')
+    const formData = new FormData(event.currentTarget)
+    const email = String(formData.get('email') ?? '').trim()
+    const name = String(formData.get('name') ?? '').trim()
+    const password = String(formData.get('password') ?? '')
+    const confirmPassword = String(formData.get('confirm-password') ?? '')
+    if (password !== confirmPassword) {
+      setNotice('The passwords do not match. Please check both password fields.')
+      return
+    }
+    if (!token || !hotelId) {
+      setNotice('This invitation link is incomplete. Ask your manager to send a new invitation.')
+      return
+    }
+    if (!email) {
+      setNotice('Enter the email address that received this invitation.')
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      await apiRequest('/auth/accept-invitation', {
+        method: 'POST',
+        body: JSON.stringify({ token, hotelId, email, name, password }),
+      })
+      setIsComplete(true)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not accept this invitation. Ask your manager to send a new one.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <PortalFrame eyebrow="HOTEL TEAM INVITATION" title={isComplete ? 'You’re all set' : 'Accept your invitation'} description={isComplete ? 'Your account is ready. Sign in with your email and the password you just created.' : 'Set a password to activate your receptionist account.'} previewOnly={false}>
+      {isComplete ? (
+        <div className="space-y-4">
+          <p role="status" className="border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-xs text-emerald-900">Your invitation has been accepted and your password has been set.</p>
+          <Link to="/hotel/login" className="flex min-h-12 w-full items-center justify-center gap-2 bg-forest px-4 py-3 text-[10px] font-semibold tracking-[0.12em] text-white hover:bg-forest-deep">CONTINUE TO SIGN IN <ArrowRight aria-hidden="true" className="size-3.5" /></Link>
+        </div>
+      ) : (
+        <form onSubmit={(event) => { void submit(event) }} className="space-y-4">
+          <label className="block text-[10px] font-semibold tracking-wide text-ink">INVITED EMAIL
+            <input className={fieldClass} type="email" name="email" autoComplete="email" defaultValue={invitationEmail} maxLength={254} required />
+            <span className="mt-1 block text-[9px] font-normal normal-case tracking-normal text-muted">Use the same address where you received the invitation.</span>
+          </label>
+          <label className="block text-[10px] font-semibold tracking-wide text-ink">FULL NAME
+            <input className={fieldClass} type="text" name="name" autoComplete="name" minLength={2} maxLength={120} required />
+          </label>
+          <PasswordField label="CREATE PASSWORD" autoComplete="new-password" name="password" minLength={12} />
+          <PasswordField label="CONFIRM PASSWORD" autoComplete="new-password" name="confirm-password" minLength={12} />
+          <p className="text-[9px] leading-4 text-muted">Use at least 12 characters. Your invitation link can only be used once.</p>
+          <button type="submit" disabled={isSubmitting || !token || !hotelId} className="group flex min-h-12 w-full items-center justify-center gap-2 bg-forest px-4 py-3 text-[10px] font-semibold tracking-[0.12em] text-white shadow-sm transition-colors hover:bg-forest-deep disabled:cursor-not-allowed disabled:opacity-70">{isSubmitting ? 'ACTIVATING ACCOUNT…' : 'ACCEPT INVITATION'} {!isSubmitting && <ArrowRight aria-hidden="true" className="size-3.5 transition-transform group-hover:translate-x-1" />}</button>
+          {notice && <PreviewNotice message={notice} />}
+          {(!token || !hotelId) && <p role="alert" className="text-[10px] text-rose-800">This invitation link is incomplete. Ask your manager to send a new invitation.</p>}
         </form>
       )}
     </PortalFrame>

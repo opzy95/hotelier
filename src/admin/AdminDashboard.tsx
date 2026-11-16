@@ -5,7 +5,6 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   Search,
   UsersRound,
   Wallet,
@@ -27,26 +26,8 @@ import { useAdminStaff } from './AdminStaffContext'
 import { useHotelSession } from './HotelSessionContext'
 
 type OperationTab = 'Arrivals' | 'Departures'
-type OperationStatus = 'Check In' | 'Checked In' | 'Pre-Assigned' | 'Check Out' | 'Checked Out'
-
-type Operation = {
-  guest: string
-  room: string
-  tier: string
-  time: string
-  service: string
-  status: OperationStatus
-}
 
 const EMPTY_RESERVATIONS: ReservationPage['reservations'] = []
-
-const initialOperations: Operation[] = [
-  { guest: 'Chief A. Adeleke', room: 'Executive Lagoon Suite · Room 402', tier: 'VIP BUTLER', time: '14:00 WAT', service: 'Lagoon Jetty Shuttle', status: 'Check In' },
-  { guest: 'Lady K. Danjuma', room: 'Presidential Sanctuary · Penthouse A', tier: 'PRESIDENTIAL', time: '15:30 WAT', service: 'Private Yacht Charter', status: 'Check In' },
-  { guest: 'Folake Solanke-Bello', room: 'Waterfront Haven Villa · Villa 08', tier: '', time: '16:45 WAT', service: 'Private Sedan Escort', status: 'Pre-Assigned' },
-  { guest: 'Dr. Obinna Okonkwo', room: 'Deluxe Lagoon Room · Room 216', tier: 'CORPORATE', time: '11:00 WAT', service: 'Airport Transfer', status: 'Check Out' },
-  { guest: 'Ambassador G. Moreau', room: 'Executive Lagoon Suite · Room 518', tier: 'DIPLOMATIC', time: '12:00 WAT', service: 'Private Sedan Escort', status: 'Check Out' },
-]
 
 function reservationStatusClass(status: string) {
   if (status === 'Confirmed') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -81,13 +62,14 @@ function MetricCard({ label, value, note, icon: Icon, change }: {
 export function AdminDashboard() {
   const { rooms, roomLoading, roomError } = useAdminReservations()
   const { staff, departments } = useAdminStaff()
-  const { hotelName, managerName } = useHotelSession()
+  const { hotelName, userName } = useHotelSession()
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
   const [reservationState, setReservationState] = useState<{
     hotelId: string
     result?: ReservationPage
     error?: string
   }>({ hotelId: '' })
+  const [reservationReloadKey, setReservationReloadKey] = useState(0)
   const [todayLabel] = useState(() => new Date().toLocaleDateString('en-GB', {
     timeZone: 'Africa/Lagos',
     weekday: 'long',
@@ -102,7 +84,6 @@ export function AdminDashboard() {
     day: '2-digit',
   }).format(new Date()))
   const [operationTab, setOperationTab] = useState<OperationTab>('Arrivals')
-  const [operations, setOperations] = useState(initialOperations)
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const rowsPerPage = 5
@@ -125,7 +106,12 @@ export function AdminDashboard() {
       })
 
     return () => { cancelled = true }
-  }, [hotelId])
+  }, [hotelId, reservationReloadKey])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setReservationReloadKey((current) => current + 1), 30_000)
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   const hasReservationData = reservationState.hotelId === hotelId && Boolean(reservationState.result)
   const reservationsLoading = Boolean(hotelId) && reservationState.hotelId !== hotelId
@@ -147,11 +133,15 @@ export function AdminDashboard() {
   const totalPages = Math.max(1, Math.ceil(filteredReservations.length / rowsPerPage))
   const currentPage = Math.min(page, totalPages)
   const visibleReservations = filteredReservations.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage)
-  const activeOperations = operations.filter((operation) => (
-    operationTab === 'Arrivals'
-      ? operation.status === 'Check In' || operation.status === 'Checked In' || operation.status === 'Pre-Assigned'
-      : operation.status === 'Check Out' || operation.status === 'Checked Out'
-  ))
+  const todayArrivals = useMemo(() => reservations.filter((reservation) => (
+    reservation.checkIn === todayDate
+    && !['Cancelled', 'No Show'].includes(reservation.folio)
+  )), [reservations, todayDate])
+  const todayDepartures = useMemo(() => reservations.filter((reservation) => (
+    reservation.checkOut === todayDate
+    && ['Checked In', 'Checked Out'].includes(reservation.folio)
+  )), [reservations, todayDate])
+  const activeOperations = operationTab === 'Arrivals' ? todayArrivals : todayDepartures
   const roomsForToday = useMemo(
     () => getRoomStatusesForDate(rooms, reservations, todayDate),
     [rooms, reservations, todayDate],
@@ -173,21 +163,13 @@ export function AdminDashboard() {
   const paymentPositionTotal = collectedAmount + outstandingAmount
   const collectedShare = paymentPositionTotal ? (collectedAmount / paymentPositionTotal) * 100 : 0
 
-  function updateOperationStatus(operation: Operation) {
-    setOperations((current) => current.map((item) => (
-      item === operation
-        ? { ...item, status: operationTab === 'Arrivals' ? 'Checked In' : 'Checked Out' }
-        : item
-    )))
-  }
-
   return (
     <section className="mx-auto max-w-[1600px]">
       <header className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <p className="text-[9px] font-semibold tracking-[0.17em] text-amber-800">EXECUTIVE OPERATIONS</p>
           <h1 className="mt-1 font-display text-2xl text-ink sm:text-3xl">Dashboard Overview</h1>
-          <p className="mt-1 text-xs text-muted">Welcome back, {managerName} <span className="mx-1">·</span> {todayLabel} <span className="mx-1">·</span> {hotelName}</p>
+          <p className="mt-1 text-xs text-muted">Welcome back, {userName} <span className="mx-1">·</span> {todayLabel} <span className="mx-1">·</span> {hotelName}</p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <label className="flex min-w-0 items-center gap-2 rounded-sm border border-stone-200 bg-white px-3 py-2 sm:w-64">
@@ -363,9 +345,7 @@ export function AdminDashboard() {
               </div>
               <div className="flex rounded-sm bg-stone-100 p-1" role="group" aria-label="Guest operations">
                 {(['Arrivals', 'Departures'] as const).map((tab) => {
-                  const count = operations.filter((item) => tab === 'Arrivals'
-                    ? item.status === 'Check In' || item.status === 'Checked In' || item.status === 'Pre-Assigned'
-                    : item.status === 'Check Out' || item.status === 'Checked Out').length
+                  const count = tab === 'Arrivals' ? todayArrivals.length : todayDepartures.length
                   return (
                     <button
                       type="button"
@@ -381,36 +361,38 @@ export function AdminDashboard() {
               </div>
             </div>
             <div className="mt-3 grid gap-2">
-              {activeOperations.length ? activeOperations.map((operation) => {
-                const complete = operation.status === 'Checked In' || operation.status === 'Checked Out'
-                const preAssigned = operation.status === 'Pre-Assigned'
+              {reservationsLoading ? <p className="py-6 text-center text-xs text-muted">Loading today’s operations…</p>
+                : reservationsError ? <p className="py-6 text-center text-xs text-rose-800">Today’s operations are unavailable.</p>
+                  : activeOperations.length ? activeOperations.map((reservation) => {
+                const isArrival = operationTab === 'Arrivals'
+                const complete = isArrival
+                  ? reservation.folio === 'Checked In' || reservation.folio === 'Checked Out'
+                  : reservation.folio === 'Checked Out'
+                const operationLabel = isArrival
+                  ? reservation.folio === 'Checked In' ? 'Checked In' : reservation.folio === 'Checked Out' ? 'Checked Out' : 'Check In'
+                  : reservation.folio === 'Checked Out' ? 'Checked Out' : 'Check Out'
                 return (
-                  <article key={operation.guest} className="rounded-sm bg-paper p-3">
+                  <article key={reservation.reference} className="rounded-sm bg-paper p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <strong className="block text-xs text-ink">{operation.guest}</strong>
-                        <span className="mt-1 block text-[10px] text-muted">{operation.room}</span>
+                        <strong className="block text-xs text-ink">{reservation.guest}</strong>
+                        <span className="mt-1 block text-[10px] text-muted">
+                          {reservation.room}{reservation.assignedRoomId ? ` · Room ${reservation.assignedRoomId}` : ''}
+                        </span>
                       </div>
-                      {operation.tier && <span className="shrink-0 rounded-sm bg-champagne/50 px-1.5 py-1 text-[8px] font-semibold text-amber-950">{operation.tier}</span>}
+                      {reservation.tier && <span className="shrink-0 rounded-sm bg-champagne/50 px-1.5 py-1 text-[8px] font-semibold text-amber-950">{reservation.tier}</span>}
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="flex min-w-0 items-center gap-1 text-[9px] text-muted"><Clock3 aria-hidden="true" className="size-3 shrink-0" />{operation.time} · {operation.service}</span>
-                      <button
-                        type="button"
-                        disabled={complete || preAssigned}
-                        onClick={() => updateOperationStatus(operation)}
-                        className={`shrink-0 rounded-sm px-2 py-1.5 text-[9px] font-medium transition-colors disabled:cursor-default ${
-                          complete ? 'bg-emerald-100 text-emerald-800'
-                            : preAssigned ? 'bg-stone-200 text-stone-600'
-                              : 'bg-forest text-white hover:bg-forest-deep'
-                        }`}
-                      >
-                        {operation.status}
-                      </button>
+                      <span className="min-w-0 truncate text-[9px] text-muted">
+                        {isArrival ? 'Arrival' : 'Departure'} · {formatReservationDate(isArrival ? reservation.checkIn : reservation.checkOut)} · {reservation.reference}
+                      </span>
+                      {complete
+                        ? <span className="shrink-0 rounded-sm bg-emerald-100 px-2 py-1.5 text-[9px] font-medium text-emerald-800">{operationLabel}</span>
+                        : <Link to="/dashboard/check-in" className="shrink-0 rounded-sm bg-forest px-2 py-1.5 text-[9px] font-medium text-white transition-colors hover:bg-forest-deep">{operationLabel}</Link>}
                     </div>
                   </article>
                 )
-              }) : <p className="py-6 text-center text-xs text-muted">No operations in this list.</p>}
+              }) : <p className="py-6 text-center text-xs text-muted">No {operationTab.toLowerCase()} scheduled for today.</p>}
             </div>
             <p className="mt-3 flex items-center justify-between border-t border-stone-100 pt-3 text-[10px] text-muted">
               <span>Today’s dispatch schedule</span>

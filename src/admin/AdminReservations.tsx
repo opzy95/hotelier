@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
+import { useHotelSession } from './HotelSessionContext'
 import { currencyMinorUnitScale, reservationBalanceDue, reservationPaidAmount } from './adminReservationsData'
 import type { FolioStatus, PaymentStatus, Reservation } from './adminReservationsData'
 import { createPaymentIdempotencyKey, createReservation as createReservationRequest, fetchReservationAvailability, fetchReservations, fetchReservationPayments, recordReservationPayment, updateReservationStatus } from './adminReservationsApi'
@@ -122,7 +123,7 @@ function exportReservations(rows: Reservation[]) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
-function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, roomLoading, roomError }: {
+function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, roomLoading, roomError, allowInitialPayment }: {
   onClose: () => void
   onCreate: (reservation: ReservationDraft, initialPayment?: ReservationPayment) => Promise<Reservation>
   hotelId: string
@@ -130,6 +131,7 @@ function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, r
   roomTypes: RoomType[]
   roomLoading: boolean
   roomError: string
+  allowInitialPayment: boolean
 }) {
   const [step, setStep] = useState(0)
   const [selectedRoomTypeId, setSelectedRoomTypeId] = useState('')
@@ -207,7 +209,7 @@ function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, r
       setFormError('Choose a room type and an available room for the selected guest count.')
       return
     }
-    if (step === 2 && initialPaymentAmount) {
+    if (step === 2 && allowInitialPayment && initialPaymentAmount) {
       const amount = Number(initialPaymentAmount)
       if (!Number.isFinite(amount) || amount <= 0 || amount > totalAmount) {
         setFormError(`Enter an initial payment greater than zero and no more than the estimated total of ${formatAmount(totalAmount, currency)}.`)
@@ -228,7 +230,7 @@ function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, r
     setSaving(true)
     setFormError('')
     try {
-      const initialPayment = initialPaymentAmount
+      const initialPayment = allowInitialPayment && initialPaymentAmount
         ? {
           amountMinor: Math.round(Number(initialPaymentAmount) * minorUnitScale),
           method: initialPaymentMethod,
@@ -398,7 +400,7 @@ function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, r
                   <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Estimated total</span><strong className="text-ink">{formatAmount(totalAmount, currency)}</strong></div>
                   <p className="text-[9px] text-muted">The server confirms availability and calculates the saved reservation price.</p>
                 </section>
-                <section className="space-y-3 rounded-sm border border-stone-200 bg-white p-3">
+                {allowInitialPayment && <section className="space-y-3 rounded-sm border border-stone-200 bg-white p-3">
                   <div>
                     <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT · OPTIONAL</h3>
                     <p className="mt-1 text-[9px] text-muted">Record a full or partial payment now, or leave the amount blank to collect it later.</p>
@@ -417,7 +419,7 @@ function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, r
                     <span className="text-muted">Estimated balance due</span>
                     <strong className="text-amber-900">{formatAmount(Math.max(0, totalAmount - (Number(initialPaymentAmount) || 0)), currency)}</strong>
                   </div>
-                </section>
+                </section>}
               </>
             )}
             {formError && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-800">{formError}</p>}
@@ -437,13 +439,14 @@ function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, r
   )
 }
 
-function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecordPayment, pendingPayment }: {
+function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecordPayment, pendingPayment, canRecordPayment }: {
   reservation: Reservation
   inventory: Room[]
   hotelId: string
   onClose: () => void
   onRecordPayment: (payment: ReservationPayment) => Promise<void>
   pendingPayment?: ReservationPayment
+  canRecordPayment: boolean
 }) {
   const currency = reservation.currency ?? 'NGN'
   const minorUnitScale = currencyMinorUnitScale(currency)
@@ -461,13 +464,13 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
   const paymentHistoryQueryKey = [hotelId, reservation.id ?? '', paymentHistoryReload].join('|')
   const hasCurrentPaymentHistory = paymentHistoryState.queryKey === paymentHistoryQueryKey
   const paymentHistory = hasCurrentPaymentHistory ? paymentHistoryState.payments : undefined
-  const paymentHistoryLoading = Boolean(reservation.id && hotelId && !hasCurrentPaymentHistory)
-  const paymentHistoryError = hasCurrentPaymentHistory
+  const paymentHistoryLoading = canRecordPayment && Boolean(reservation.id && hotelId && !hasCurrentPaymentHistory)
+  const paymentHistoryError = !canRecordPayment ? '' : hasCurrentPaymentHistory
     ? paymentHistoryState.error ?? ''
     : !reservation.id ? 'This reservation has no database ID.' : !hotelId ? 'Select a hotel to load its payment history.' : ''
 
   useEffect(() => {
-    if (!reservation.id || !hotelId) return
+    if (!canRecordPayment || !reservation.id || !hotelId) return
 
     let cancelled = false
     void fetchReservationPayments(hotelId, reservation.id)
@@ -484,7 +487,7 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
       })
 
     return () => { cancelled = true }
-  }, [hotelId, paymentHistoryQueryKey, reservation.id])
+  }, [canRecordPayment, hotelId, paymentHistoryQueryKey, reservation.id])
   const balance = reservationBalanceDue(reservation)
 
   async function submitPayment(event: FormEvent<HTMLFormElement>) {
@@ -536,7 +539,7 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
           <div className="py-3"><dt className="text-[10px] text-muted">Remaining balance</dt><dd className={`mt-1 text-xs font-bold ${reservationBalanceDue(reservation) ? 'text-amber-900' : 'text-ink'}`}>{formatAmount(reservationBalanceDue(reservation), reservation.currency)}</dd></div>
           <div className="py-3 sm:col-span-2"><dt className="text-[10px] text-muted">Payment / folio</dt><dd className="mt-1 text-xs text-ink">{reservation.payment} / {reservation.folio}</dd></div>
         </dl>
-        <section className="mt-4 border border-stone-200 bg-white p-3">
+        {canRecordPayment && <section className="mt-4 border border-stone-200 bg-white p-3">
           <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT HISTORY</h3>
           {paymentHistoryLoading && <p className="mt-2 text-[10px] text-muted">Loading payment history…</p>}
           {paymentHistoryError && <p role="alert" className="mt-2 text-[10px] text-rose-800">{paymentHistoryError}</p>}
@@ -556,8 +559,8 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
               ))}
             </ul>
           )}
-        </section>
-        {balance > 0 && reservation.folio !== 'Cancelled' && reservation.folio !== 'No Show' && reservation.payment !== 'Refunded' && (
+        </section>}
+        {canRecordPayment && balance > 0 && reservation.folio !== 'Cancelled' && reservation.folio !== 'No Show' && reservation.payment !== 'Refunded' && (
           <form onSubmit={submitPayment} className="mt-4 space-y-3 border border-stone-200 bg-paper p-3">
             <div>
               <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT</h3>
@@ -607,7 +610,21 @@ function CancelReservationDialog({ reservation, onClose, onConfirm, saving }: {
 }
 
 export function AdminReservations() {
-  const { rooms, roomTypes, roomLoading, roomError } = useAdminReservations()
+  const {
+    reservations: allReservations,
+    setReservations: setAllReservations,
+    reservationsLoading: allReservationsLoading,
+    reservationsError: allReservationsError,
+    rooms,
+    roomTypes,
+    roomLoading,
+    roomError,
+  } = useAdminReservations()
+  const { managerRole, permissions } = useHotelSession()
+  const isManager = managerRole.toLowerCase() === 'manager'
+  const readOnly = managerRole.toLowerCase() !== 'manager'
+  const canCreateReservations = isManager || permissions.includes('reservations.create')
+  const canRecordPayments = isManager || permissions.includes('payments.walk_in.create')
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
   const [rows, setRows] = useState<Reservation[]>([])
   const [pagination, setPagination] = useState({ page: 1, limit: rowsPerPage, total: 0, pages: 0 })
@@ -631,6 +648,11 @@ export function AdminReservations() {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250)
     return () => window.clearTimeout(timer)
   }, [search])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setReloadKey((current) => current + 1), 30_000)
+    return () => window.clearInterval(intervalId)
+  }, [])
 
   useEffect(() => {
     if (!hotelId) {
@@ -705,9 +727,12 @@ export function AdminReservations() {
   }
 
   async function createReservation(draft: ReservationDraft, initialPayment?: ReservationPayment) {
+    if (!canCreateReservations) throw new Error('Your account does not have permission to create reservations.')
+    if (initialPayment && !canRecordPayments) throw new Error('Your account does not have permission to record reservation payments.')
     if (!hotelId) throw new Error('Select a hotel before creating a reservation.')
     setActionError('')
     let reservation = await createReservationRequest(hotelId, draft)
+    setAllReservations((current) => [reservation, ...current])
     setRows((current) => page === 1 ? [reservation, ...current].slice(0, rowsPerPage) : current)
     setPagination((current) => ({ ...current, total: current.total + 1 }))
     setPage(1)
@@ -747,6 +772,7 @@ export function AdminReservations() {
   }
 
   async function recordPayment(reservation: Reservation, payment: ReservationPayment) {
+    if (!canRecordPayments) throw new Error('Your account does not have permission to record reservation payments.')
     if (!reservation.id) throw new Error('This reservation is missing its database ID and cannot accept a payment.')
     if (!hotelId) throw new Error('Select a hotel before recording a payment.')
 
@@ -801,14 +827,14 @@ export function AdminReservations() {
     <section className="mx-auto max-w-[1600px]">
       <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <p className="text-[9px] font-semibold tracking-[0.15em] text-amber-800">FOLIO REGISTRY &amp; CONCIERGE AUDIT</p>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => exportReservations(filteredRows)} className="inline-flex items-center justify-center gap-2 rounded-sm border border-stone-300 bg-white px-3 py-2 text-[10px] font-semibold tracking-wide text-ink hover:bg-stone-50">
+        {(isManager || canCreateReservations) && <div className="flex flex-wrap gap-2">
+          {isManager && <button type="button" onClick={() => exportReservations(filteredRows)} className="inline-flex items-center justify-center gap-2 rounded-sm border border-stone-300 bg-white px-3 py-2 text-[10px] font-semibold tracking-wide text-ink hover:bg-stone-50">
             <ArrowDownToLine aria-hidden="true" className="size-3.5" /> EXPORT FOLIO (CSV)
-          </button>
-          <button type="button" onClick={() => setCreateOpen(true)} className="inline-flex items-center justify-center gap-2 rounded-sm bg-forest px-3 py-2 text-[10px] font-semibold tracking-wide text-white hover:bg-forest-deep">
+          </button>}
+          {canCreateReservations && <button type="button" onClick={() => setCreateOpen(true)} className="inline-flex items-center justify-center gap-2 rounded-sm bg-forest px-3 py-2 text-[10px] font-semibold tracking-wide text-white hover:bg-forest-deep">
             <Plus aria-hidden="true" className="size-3.5" /> CREATE RESERVATION
-          </button>
-        </div>
+          </button>}
+        </div>}
       </div>
 
       <header className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -825,8 +851,8 @@ export function AdminReservations() {
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
           <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">TOTAL RESERVATIONS</span>
           <CalendarDays aria-hidden="true" className="absolute right-4 top-4 size-8 rounded-sm bg-paper p-2 text-muted" />
-          <strong className="mt-2 block font-display text-2xl text-ink">{pagination.total}</strong>
-          <p className="mt-1 text-[10px] text-muted">Reservations currently available</p>
+          <strong className="mt-2 block font-display text-2xl text-ink">{allReservationsLoading || allReservationsError ? '—' : allReservations.length}</strong>
+          <p className="mt-1 text-[10px] text-muted">All reservations in this hotel</p>
         </article>
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
           <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">UPCOMING ON PAGE</span>
@@ -913,7 +939,7 @@ export function AdminReservations() {
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-1">
                       <button type="button" onClick={() => setSelectedReservation(reservation)} className="rounded-sm border border-stone-200 px-2 py-1 text-[10px] font-medium text-ink hover:border-forest hover:text-forest">View</button>
-                      {['Confirmed', 'Pending Payment'].includes(reservation.folio) && <button type="button" onClick={() => setReservationToCancel(reservation)} className="rounded-sm border border-rose-200 px-2 py-1 text-[10px] font-medium text-rose-700 hover:bg-rose-50">Cancel</button>}
+                      {!readOnly && ['Confirmed', 'Pending Payment'].includes(reservation.folio) && <button type="button" onClick={() => setReservationToCancel(reservation)} className="rounded-sm border border-rose-200 px-2 py-1 text-[10px] font-medium text-rose-700 hover:bg-rose-50">Cancel</button>}
                     </div>
                   </td>
                 </tr>
@@ -943,6 +969,7 @@ export function AdminReservations() {
         roomTypes={roomTypes}
         roomLoading={roomLoading}
         roomError={roomError}
+        allowInitialPayment={canRecordPayments}
       />}
       {selectedReservation && <ReservationDetails
         reservation={selectedReservation}
@@ -951,6 +978,7 @@ export function AdminReservations() {
         onClose={() => setSelectedReservation(null)}
         onRecordPayment={(payment) => recordPayment(selectedReservation, payment)}
         pendingPayment={selectedReservation.id ? pendingPayments[selectedReservation.id] : undefined}
+        canRecordPayment={canRecordPayments}
       />}
       {reservationToCancel && <CancelReservationDialog reservation={reservationToCancel} onClose={() => setReservationToCancel(null)} onConfirm={cancelReservation} saving={cancelling} />}
     </section>

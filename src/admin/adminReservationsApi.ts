@@ -125,6 +125,17 @@ function nestedRecord(record: ApiRecord, field: string) {
   return value
 }
 
+function hotelLocalDateKey(date: Date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
+  return `${values.year}-${values.month}-${values.day}`
+}
+
 export async function fetchReservationAvailability(
   hotelId: string,
   query: ReservationAvailabilityQuery,
@@ -173,6 +184,7 @@ function normalizeReservation(value: unknown): Reservation {
   const total = numberField(pricing, 'totalMinor') / minorUnitScale
   const paymentStatus = stringField(value, 'paymentStatus')
   const source = optionalStringField(value, 'source')
+  const checkOut = stringField(value, 'checkOut')
   const folioByStatus: Record<string, Reservation['folio']> = {
     confirmed: 'Confirmed',
     cancelled: 'Cancelled',
@@ -191,6 +203,9 @@ function normalizeReservation(value: unknown): Reservation {
   const payment = paymentByStatus[paymentStatus]
   if (!folio) throw new Error(`The hotel API returned an unsupported reservation status: ${status}.`)
   if (!payment) throw new Error(`The hotel API returned an unsupported payment status: ${paymentStatus}.`)
+  const displayedFolio = folio === 'Checked In' && checkOut.slice(0, 10) < hotelLocalDateKey(new Date())
+    ? 'Checked Out'
+    : folio
 
   return {
     id: stringField(value, 'id'),
@@ -210,7 +225,7 @@ function normalizeReservation(value: unknown): Reservation {
     source,
     registeredAt: typeof value.createdAt === 'string' ? value.createdAt.slice(0, 10) : undefined,
     checkIn: stringField(value, 'checkIn'),
-    checkOut: stringField(value, 'checkOut'),
+    checkOut,
     adults: numberField(guests, 'adults'),
     children: numberField(guests, 'children'),
     amount: total,
@@ -219,7 +234,7 @@ function normalizeReservation(value: unknown): Reservation {
     nightlyRate: numberField(pricing, 'rateMinorPerNight') / minorUnitScale,
     currency,
     payment,
-    folio,
+    folio: displayedFolio,
   }
 }
 
@@ -279,6 +294,35 @@ export async function createReservation(hotelId: string, draft: ReservationDraft
     throw new Error('The hotel API returned an invalid created reservation.')
   }
   return normalizeReservation(payload.reservation)
+}
+
+export async function createWalkInReservation(hotelId: string, draft: ReservationDraft) {
+  const payload: unknown = await apiRequest(`${hotelPath(hotelId)}/walk-ins`, {
+    method: 'POST',
+    body: JSON.stringify(draft),
+  })
+  if (!isRecord(payload) || !('reservation' in payload)) {
+    throw new Error('The hotel API returned an invalid created walk-in reservation.')
+  }
+  return normalizeReservation(payload.reservation)
+}
+
+async function updateFrontDeskReservation(hotelId: string, reservationId: string, operation: 'check-in' | 'check-out') {
+  const payload: unknown = await apiRequest(`${hotelPath(hotelId)}/${encodeURIComponent(reservationId)}/${operation}`, {
+    method: 'POST',
+  })
+  if (!isRecord(payload) || !('reservation' in payload)) {
+    throw new Error('The hotel API returned an invalid updated reservation.')
+  }
+  return normalizeReservation(payload.reservation)
+}
+
+export function checkInReservation(hotelId: string, reservationId: string) {
+  return updateFrontDeskReservation(hotelId, reservationId, 'check-in')
+}
+
+export function checkOutReservation(hotelId: string, reservationId: string) {
+  return updateFrontDeskReservation(hotelId, reservationId, 'check-out')
 }
 
 export async function recordReservationPayment(

@@ -352,8 +352,10 @@ export function HotelOnboardingPage() {
       setError('')
       try {
         const profile = await apiRequest<PlatformProfileResponse>('/auth/me')
-        const membership = profile.memberships.find((item) => item.hotelId === hotelId && item.role === 'manager')
-        if (!membership) throw new Error('You do not have manager access to this hotel.')
+        const membership = profile.memberships.find((item) => (
+          item.hotelId === hotelId && ['manager', 'receptionist'].includes(item.role.toLowerCase())
+        ))
+        if (!membership) throw new Error('You do not have access to this hotel.')
 
         const current = await apiRequest<HotelOnboardingResponse>(`/hotels/${encodeURIComponent(hotelId)}/onboarding`)
         if (cancelled) return
@@ -509,19 +511,28 @@ export function HotelDashboardGate({ children }: { children: ReactNode }) {
     async function verifySetup() {
       try {
         const profile = await apiRequest<PlatformProfileResponse>('/auth/me')
-        const membership = profile.memberships.find((item) => item.hotelId === hotelId && item.role === 'manager')
-        if (!membership) throw new Error('You do not have manager access to this hotel.')
-        const status = await apiRequest<HotelOnboardingResponse>(`/hotels/${encodeURIComponent(hotelId)}/onboarding`)
-        if (cancelled) return
-        if (status.currentStep === 'complete') {
-          setIdentity({
-            hotelName: membership.hotelName,
-            managerName: profile.user.name.trim() || profile.user.email,
-            managerRole: membership.role.replaceAll('_', ' ').toUpperCase(),
-          })
-          setIsReady(true)
+        const membership = profile.memberships.find((item) => (
+          item.hotelId === hotelId && ['manager', 'receptionist'].includes(item.role.toLowerCase())
+        ))
+        if (!membership) throw new Error('You do not have access to this hotel.')
+        if (membership.role.toLowerCase() === 'manager') {
+          const status = await apiRequest<HotelOnboardingResponse>(`/hotels/${encodeURIComponent(hotelId)}/onboarding`)
+          if (cancelled) return
+          if (status.currentStep !== 'complete') {
+            navigate('/hotel/onboarding', { replace: true })
+            return
+          }
         }
-        else navigate('/hotel/onboarding', { replace: true })
+        if (cancelled) return
+        setIdentity({
+          hotelName: membership.hotelName,
+          userName: profile.user.name.trim() || profile.user.email,
+          managerRole: membership.role.replaceAll('_', ' ').toUpperCase(),
+          permissions: Array.isArray(membership.permissions)
+            ? membership.permissions.filter((permission): permission is string => typeof permission === 'string')
+            : [],
+        })
+        setIsReady(true)
       } catch (requestError) {
         if (cancelled) return
         if (requestError instanceof ApiError && requestError.status === 401) {

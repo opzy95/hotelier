@@ -76,7 +76,10 @@ function getErrorMessage(status: number, code?: string, payload?: unknown, rawTe
   if (code === 'email_not_verified') return 'Please verify your email address before signing in.'
   if (code === 'account_already_exists') return 'An account with this email already exists.'
   if (code === 'invalid_or_expired_token') return 'This verification link is invalid or has expired. Request a new email and try again.'
+  if (code === 'invalid_or_expired_invitation') return 'This invitation is invalid, expired, or has already been used. Ask your manager to send a new one.'
   if (code === 'verification_email_delivery_failed') return 'Your account was created, but the verification email could not be sent. Please request a new email.'
+  if (code === 'invitation_email_delivery_failed') return 'The invitation could not be emailed. Please try again or contact your hotel administrator.'
+  if (code === 'staff_invitation_already_exists') return 'An invitation for this email is already pending.'
   if (code === 'subscription_selection_locked') return 'A plan has already been selected for this hotel.'
   if (code === 'plan_not_found' || code === 'invalid_plan') return 'That plan is unavailable. Please choose another plan.'
   if (code === 'authentication_required' || code === 'invalid_token') return 'Your session has expired. Please sign in again.'
@@ -100,7 +103,7 @@ async function sendRequest(path: string, init: RequestInit, token: string | null
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   try {
-    return await fetch(`${API_BASE_URL}${path}`, { ...init, headers, credentials: 'include' })
+    return await fetch(`${API_BASE_URL}${path}`, { ...init, headers, credentials: 'include', cache: 'no-store' })
   } catch {
     throw new Error(`Could not reach the hotel API at ${API_BASE_URL}. Make sure the backend is running.`)
   }
@@ -125,7 +128,7 @@ async function refreshAccessToken() {
     refreshRequest = (async () => {
       let response: Response
       try {
-        response = await fetch(`${API_BASE_URL}/auth/refresh`, { method: 'POST', credentials: 'include' })
+        response = await fetch(`${API_BASE_URL}/auth/refresh`, { method: 'POST', credentials: 'include', cache: 'no-store' })
       } catch {
         throw new Error(`Could not reach the hotel API at ${API_BASE_URL}. Make sure the backend is running.`)
       }
@@ -154,16 +157,18 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   const isLoginRequest = path.split('?')[0] === '/auth/login'
   const tokenForRequest = isLoginRequest ? null : accessToken
   let response = await sendRequest(path, init, tokenForRequest)
+  let result = await readResponse(response)
 
-  if (response.status === 401 && !isLoginRequest) {
+  if ((response.status === 401 || getErrorCode(result.payload) === 'authentication_required') && !isLoginRequest) {
     const refreshedToken = accessToken && accessToken !== tokenForRequest
       ? accessToken
       : await refreshAccessToken()
     response = await sendRequest(path, init, refreshedToken)
+    result = await readResponse(response)
     if (response.status === 401) expireAccessToken()
   }
 
-  const { payload, responseText, unreadable } = await readResponse(response)
+  const { payload, responseText, unreadable } = result
 
   if (!response.ok) {
     const code = getErrorCode(payload)
@@ -197,6 +202,7 @@ export type HotelMembership = {
   hotelStatus: string
   hotelSlug: string
   role: string
+  permissions?: string[]
 }
 
 export type HotelPlan = {

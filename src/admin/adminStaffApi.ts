@@ -1,9 +1,24 @@
 import { apiRequest } from '../api'
 import type { Department, StaffDraft, StaffMember, StaffStatus } from './adminStaffData'
+import type { ReceptionistPermission } from './staffPermissions'
 
 type ApiRecord = Record<string, unknown>
 
 export type DepartmentDraft = Omit<Department, 'id'>
+
+export type StaffInvitationDraft = {
+  staffMemberId: string
+  permissions: ReceptionistPermission[]
+}
+
+export type StaffEmailInvitationDraft = {
+  email: string
+  permissions: ReceptionistPermission[]
+}
+
+export type StaffInvitationResult = {
+  staffMemberId: string
+}
 
 function isRecord(value: unknown): value is ApiRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -136,6 +151,28 @@ export async function createStaff(hotelId: string, draft: StaffDraft): Promise<S
   return normalizeStaffMember(recordFrom(payload, ['staffMember', 'staff']))
 }
 
+export async function inviteReceptionist(hotelId: string, draft: StaffInvitationDraft): Promise<StaffInvitationResult> {
+  const payload: unknown = await apiRequest(`${hotelPath(hotelId)}/staff/${encodeURIComponent(draft.staffMemberId)}/invitation`, {
+    method: 'POST',
+    body: JSON.stringify({
+      permissions: draft.permissions,
+    }),
+  })
+  const invitation = recordFrom(payload, ['invitation'])
+  const staffMemberId = requiredStringField(invitation, 'staffMemberId')
+  return { staffMemberId }
+}
+
+export function inviteReceptionistByEmail(hotelId: string, draft: StaffEmailInvitationDraft) {
+  return apiRequest<unknown>(`${hotelPath(hotelId)}/staff/invitations`, {
+    method: 'POST',
+    body: JSON.stringify({
+      email: draft.email,
+      permissions: draft.permissions,
+    }),
+  })
+}
+
 export async function updateStaff(hotelId: string, staffId: string, draft: StaffDraft): Promise<StaffMember> {
   const payload: unknown = await apiRequest(`${hotelPath(hotelId)}/staff/${encodeURIComponent(staffId)}`, {
     method: 'PATCH',
@@ -145,4 +182,10 @@ export async function updateStaff(hotelId: string, staffId: string, draft: Staff
     }),
   })
   return normalizeStaffMember(recordFrom(payload, ['staffMember', 'staff']))
+}
+
+export function deleteStaff(hotelId: string, staffId: string) {
+  return apiRequest<unknown>(`${hotelPath(hotelId)}/staff/${encodeURIComponent(staffId)}`, {
+    method: 'DELETE',
+  })
 }

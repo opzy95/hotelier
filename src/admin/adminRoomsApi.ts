@@ -101,7 +101,16 @@ function normalizeRoom(record: ApiRecord, roomTypes: RoomType[]): Room {
     : isRecord(rawTypeId)
       ? recordId(rawTypeId)
       : embeddedType?.id ?? ''
-  const roomType = embeddedType ?? roomTypes.find((type) => type.id === roomTypeId)
+  const roomTypeName = stringValue(
+    typeof rawType === 'string' ? rawType : record.roomTypeName ?? record.type,
+    embeddedType?.name ?? '',
+  ).trim().toLowerCase()
+  const roomTypeById = roomTypes.find((type) => type.id === roomTypeId)
+  const matchingRoomTypes = roomTypeName
+    ? roomTypes.filter((type) => type.name.trim().toLowerCase() === roomTypeName)
+    : []
+  const roomTypeByName = matchingRoomTypes.length === 1 ? matchingRoomTypes[0] : undefined
+  const roomType = roomTypeById ?? roomTypeByName ?? embeddedType
   const status = normalizeStatus(record.status)
   const currentStay = isRecord(record.currentStay) ? record.currentStay : undefined
   const roomRate = record.baseRateMinor !== undefined
@@ -111,7 +120,7 @@ function normalizeRoom(record: ApiRecord, roomTypes: RoomType[]): Room {
   return {
     id,
     name: stringValue(record.code ?? record.roomNumber ?? record.number ?? record.name, id),
-    roomTypeId,
+    roomTypeId: roomType?.id ?? roomTypeId,
     type: roomType?.name ?? stringValue(record.type, 'Room type'),
     floor: numberValue(record.floor, 1),
     wing: stringValue(record.wing ?? record.building),
@@ -134,9 +143,10 @@ function hotelPath(hotelId: string) {
 }
 
 export async function fetchRoomInventory(hotelId: string, includeInactiveRooms = false) {
+  const roomTypesQuery = includeInactiveRooms ? '?includeInactive=true' : ''
   const roomsQuery = includeInactiveRooms ? '?includeInactive=true' : ''
   const [typePayload, roomPayload] = await Promise.all([
-    apiRequest<unknown>(`${hotelPath(hotelId)}/room-types?includeInactive=true`),
+    apiRequest<unknown>(`${hotelPath(hotelId)}/room-types${roomTypesQuery}`),
     apiRequest<unknown>(`${hotelPath(hotelId)}/rooms${roomsQuery}`),
   ])
   const roomTypes = recordsFrom(typePayload, 'roomTypes').map(normalizeRoomType)

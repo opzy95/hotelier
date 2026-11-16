@@ -1,12 +1,18 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
-import { BriefcaseBusiness, Check, CircleCheck, Clock3, Mail, Pencil, Phone, Plus, Search, UsersRound, X } from 'lucide-react'
+import { BriefcaseBusiness, Check, CircleCheck, Clock3, Ellipsis, Mail, Pencil, Phone, Plus, RefreshCw, Search, Send, Trash2, UsersRound, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import { useAdminStaff } from './AdminStaffContext'
 import type { Department, StaffDraft, StaffMember, StaffStatus } from './adminStaffData'
-import { createDepartment, createStaff, updateStaff } from './adminStaffApi'
-import type { DepartmentDraft } from './adminStaffApi'
+import { createDepartment, createStaff, deleteStaff, inviteReceptionist, inviteReceptionistByEmail, updateStaff } from './adminStaffApi'
+import type { DepartmentDraft, StaffEmailInvitationDraft, StaffInvitationDraft } from './adminStaffApi'
+import { defaultReceptionistPermissions, receptionistPermissionOptions } from './staffPermissions'
+import type { ReceptionistPermission } from './staffPermissions'
 
 type StaffFilter = 'All Staff' | StaffStatus
+type ReceptionistInvitationDraft =
+  | ({ mode: 'existing' } & StaffInvitationDraft)
+  | ({ mode: 'email' } & StaffEmailInvitationDraft)
 
 function statusStyle(status: StaffStatus) {
   if (status === 'On Duty') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -114,6 +120,118 @@ function DepartmentForm({ onClose, onSave, saving, error }: {
   )
 }
 
+function ReceptionistInviteForm({ staff, initialStaffMemberId, onClose, onSave, saving, error }: {
+  staff: StaffMember[]
+  initialStaffMemberId?: string
+  onClose: () => void
+  onSave: (draft: ReceptionistInvitationDraft) => void
+  saving: boolean
+  error: string
+}) {
+  const [mode, setMode] = useState<'existing' | 'email'>(staff.length ? 'existing' : 'email')
+  const [staffMemberId, setStaffMemberId] = useState(
+    staff.find((member) => member.id === initialStaffMemberId)?.id ?? staff[0]?.id ?? '',
+  )
+  const [email, setEmail] = useState('')
+  const [permissions, setPermissions] = useState<ReceptionistPermission[]>(defaultReceptionistPermissions)
+  const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-xs text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    onSave(mode === 'existing'
+      ? { mode, staffMemberId, permissions }
+      : { mode, email: email.trim(), permissions })
+  }
+
+  function togglePermission(permission: ReceptionistPermission) {
+    setPermissions((current) => {
+      if (permission === 'reservations.create' && current.includes(permission)) {
+        return current.filter((value) => value !== 'reservations.create')
+      }
+      if (permission === 'payments.walk_in.create' && current.includes(permission)) {
+        return current.filter((value) => value !== 'payments.walk_in.create')
+      }
+      if (permission === 'reservations.check_in' && current.includes(permission)) {
+        return current.filter((value) => value !== 'reservations.check_in')
+      }
+      if (permission === 'reservations.view' && current.includes(permission)) {
+        return current.filter((value) => !['reservations.view', 'reservations.check_in', 'reservations.check_out', 'reservations.create', 'payments.walk_in.create'].includes(value))
+      }
+      if (permission === 'rooms.availability.view' && current.includes(permission)) {
+        return current.filter((value) => value !== 'rooms.availability.view' && value !== 'reservations.create')
+      }
+      if (permission === 'reservations.create') {
+        const next = new Set<ReceptionistPermission>(current)
+        next.add('reservations.view')
+        next.add('rooms.availability.view')
+        next.add('reservations.create')
+        return [...next]
+      }
+      if (permission === 'payments.walk_in.create') {
+        const next = new Set<ReceptionistPermission>(current)
+        next.add('reservations.view')
+        next.add('payments.walk_in.create')
+        return [...next]
+      }
+      if (permission === 'reservations.check_in' || permission === 'reservations.check_out') {
+        const next = new Set<ReceptionistPermission>(current)
+        next.add('reservations.view')
+        next.add(permission)
+        return [...next]
+      }
+      return current.includes(permission)
+        ? current.filter((value) => value !== permission)
+        : [...current, permission]
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex justify-end bg-black/50" onMouseDown={onClose}>
+      <section role="dialog" aria-modal="true" aria-labelledby="receptionist-invite-title" className="flex h-full w-full max-w-[440px] flex-col bg-paper shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="flex items-start justify-between border-b border-stone-200 bg-white px-5 py-4">
+          <div><p className="text-[10px] font-semibold tracking-[0.15em] text-amber-800">STAFF ACCESS</p><h2 id="receptionist-invite-title" className="mt-1 font-display text-xl text-ink">Invite Receptionist</h2><p className="mt-1 text-[11px] text-muted">They will receive a one-time link to accept the invitation and set a password.</p></div>
+          <button type="button" onClick={onClose} aria-label="Close receptionist invitation" className="grid size-8 place-items-center text-muted hover:bg-stone-100"><X aria-hidden="true" className="size-4" /></button>
+        </header>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <div className="flex-1 space-y-4 overflow-y-auto p-5">
+            <div className="grid grid-cols-2 gap-1 border border-stone-200 bg-stone-100 p-1" role="group" aria-label="Invitation recipient type">
+              <button type="button" aria-pressed={mode === 'existing'} disabled={!staff.length} onClick={() => setMode('existing')} className={`px-2 py-2 text-[10px] font-medium disabled:cursor-not-allowed disabled:opacity-50 ${mode === 'existing' ? 'bg-white text-ink shadow-sm' : 'text-muted'}`}>Existing staff</button>
+              <button type="button" aria-pressed={mode === 'email'} onClick={() => setMode('email')} className={`px-2 py-2 text-[10px] font-medium ${mode === 'email' ? 'bg-white text-ink shadow-sm' : 'text-muted'}`}>Invite by email</button>
+            </div>
+            {mode === 'existing' ? (
+              <label className="block text-[10px] font-semibold tracking-wide text-ink">RECEPTIONIST *
+                <select className={fieldClass} value={staffMemberId} onChange={(event) => setStaffMemberId(event.target.value)} required disabled={!staff.length}>
+                  {staff.map((member) => <option key={member.id} value={member.id}>{member.name} · {member.email}</option>)}
+                </select>
+              </label>
+            ) : (
+              <label className="block text-[10px] font-semibold tracking-wide text-ink">EMAIL ADDRESS *
+                <input className={fieldClass} type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" maxLength={254} required />
+                <span className="mt-1 block text-[9px] font-normal normal-case tracking-normal text-muted">The recipient will join the staff list after accepting the invitation.</span>
+              </label>
+            )}
+            <fieldset className="space-y-2 border border-stone-200 bg-white p-3">
+              <legend className="px-1 text-[10px] font-semibold tracking-wide text-ink">ALLOWED OPERATIONS</legend>
+              <p className="mb-2 text-[9px] leading-4 text-muted">Only selected operations will appear in the receptionist workspace.</p>
+              {receptionistPermissionOptions.map(({ value, label }) => (
+                <label key={value} className="flex items-start gap-2 text-[10px] leading-4 text-ink">
+                  <input type="checkbox" checked={permissions.includes(value)} onChange={() => togglePermission(value)} className="mt-0.5 accent-[#183a2d]" />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </fieldset>
+            {error && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">{error}</p>}
+          </div>
+          <footer className="flex justify-end gap-2 border-t border-stone-200 bg-white p-4">
+            <button type="button" onClick={onClose} disabled={saving} className="border border-stone-300 px-4 py-2.5 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={saving || !permissions.length || (mode === 'existing' ? !staffMemberId : !email.trim())} className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-not-allowed disabled:opacity-50"><Send aria-hidden="true" className="size-3.5" />{saving ? 'Sending…' : 'Send Invitation'}</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  )
+}
+
 export function AdminStaff() {
   const { staff, setStaff, departments, setDepartments, loading, error, refresh } = useAdminStaff()
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
@@ -123,9 +241,18 @@ export function AdminStaff() {
   const [selectedId, setSelectedId] = useState(staff[0]?.id ?? '')
   const [editingMember, setEditingMember] = useState<StaffMember | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [showInviteForm, setShowInviteForm] = useState(false)
+  const [inviteTargetStaffId, setInviteTargetStaffId] = useState('')
   const [showDepartmentForm, setShowDepartmentForm] = useState(false)
+  const [deletingMember, setDeletingMember] = useState<StaffMember | null>(null)
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [deleteError, setDeleteError] = useState('')
+  const [successNotice, setSuccessNotice] = useState('')
+  const [invitedStaffIds, setInvitedStaffIds] = useState<string[]>([])
+  const [openActionMenuStaffId, setOpenActionMenuStaffId] = useState<string | null>(null)
+  const [actionMenuPosition, setActionMenuPosition] = useState<{ top: number; left: number } | null>(null)
+  const receptionistStaff = staff.filter((member) => member.role.trim().toLowerCase() === 'receptionist')
   const query = search.trim().toLowerCase()
 
   const filteredStaff = useMemo(() => staff.filter((member) => {
@@ -136,8 +263,39 @@ export function AdminStaff() {
   }), [departmentFilter, filter, query, staff])
 
   const selectedMember = staff.find((member) => member.id === selectedId) ?? filteredStaff[0]
+  const actionMenuMember = staff.find((member) => member.id === openActionMenuStaffId)
   const onDutyCount = staff.filter((member) => member.status === 'On Duty').length
   const onLeaveCount = staff.filter((member) => member.status === 'On Leave').length
+
+  useEffect(() => {
+    if (!openActionMenuStaffId) return
+
+    function dismissActionMenu(event: Event) {
+      if (event instanceof KeyboardEvent && event.key !== 'Escape') return
+      if (event.type === 'pointerdown') {
+        const target = event.target
+        if (target instanceof Element && (target.closest('[data-staff-action-trigger]') || target.closest('[data-staff-action-menu]'))) return
+      }
+      setOpenActionMenuStaffId(null)
+      setActionMenuPosition(null)
+    }
+
+    document.addEventListener('pointerdown', dismissActionMenu)
+    document.addEventListener('keydown', dismissActionMenu)
+    window.addEventListener('resize', dismissActionMenu)
+    window.addEventListener('scroll', dismissActionMenu, true)
+    return () => {
+      document.removeEventListener('pointerdown', dismissActionMenu)
+      document.removeEventListener('keydown', dismissActionMenu)
+      window.removeEventListener('resize', dismissActionMenu)
+      window.removeEventListener('scroll', dismissActionMenu, true)
+    }
+  }, [openActionMenuStaffId])
+
+  function closeActionMenu() {
+    setOpenActionMenuStaffId(null)
+    setActionMenuPosition(null)
+  }
 
   async function saveStaff(draft: StaffDraft, member?: StaffMember) {
     if (!hotelId) {
@@ -188,6 +346,57 @@ export function AdminStaff() {
     }
   }
 
+  async function removeStaffMember(member: StaffMember) {
+    if (!hotelId) {
+      setDeleteError('Select a hotel before removing staff.')
+      return
+    }
+
+    setSaving(true)
+    setDeleteError('')
+    try {
+      await deleteStaff(hotelId, member.id)
+      setStaff((current) => current.filter((item) => item.id !== member.id))
+      setInvitedStaffIds((current) => current.filter((id) => id !== member.id))
+      setDeletingMember(null)
+      setSuccessNotice(`${member.name} was removed from the staff list.`)
+    } catch (deleteError) {
+      setDeleteError(deleteError instanceof Error ? deleteError.message : 'Could not remove this staff member.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function sendReceptionistInvitation(draft: ReceptionistInvitationDraft) {
+    if (!hotelId) {
+      setActionError('Select a hotel before inviting staff.')
+      return
+    }
+
+    setSaving(true)
+    setActionError('')
+    setSuccessNotice('')
+    try {
+      if (draft.mode === 'existing') {
+        const { staffMemberId } = await inviteReceptionist(hotelId, draft)
+        const invitedMember = receptionistStaff.find((member) => member.id === staffMemberId)
+        setInvitedStaffIds((current) => current.includes(staffMemberId) ? current : [...current, staffMemberId])
+        setSuccessNotice(invitedMember
+          ? `Invitation sent to ${invitedMember.name} at ${invitedMember.email}.`
+          : `Invitation sent for staff record ${staffMemberId}. The staff list is being refreshed.`)
+        if (!invitedMember) refresh()
+      } else {
+        await inviteReceptionistByEmail(hotelId, draft)
+        setSuccessNotice(`Invitation sent to ${draft.email}. The recipient will appear in the staff list after accepting.`)
+      }
+      setShowInviteForm(false)
+    } catch (inviteError) {
+      setActionError(inviteError instanceof Error ? inviteError.message : 'Could not send the receptionist invitation.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const departmentStats = departments.map((department) => {
     const members = staff.filter((member) => member.departmentId === department.id)
     return { department, total: members.length, onDuty: members.filter((member) => member.status === 'On Duty').length }
@@ -206,10 +415,13 @@ export function AdminStaff() {
         <div><p className="text-[10px] font-semibold tracking-[0.17em] text-amber-800">PEOPLE &amp; OPERATIONS</p><h1 className="mt-1 font-display text-2xl text-ink sm:text-3xl">Staff &amp; Departments</h1><p className="mt-1 max-w-2xl text-[11px] text-muted sm:text-[13px]">Manage staff profiles, department assignments, and daily availability.</p></div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => { setActionError(''); setShowDepartmentForm(true) }} disabled={loading || saving} className="inline-flex h-9 items-center justify-center gap-1.5 border border-stone-300 bg-white px-3 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-50"><Plus aria-hidden="true" className="size-3.5" /> Add Department</button>
+          <button type="button" onClick={refresh} disabled={loading || saving} className="inline-flex h-9 items-center justify-center gap-1.5 border border-stone-300 bg-white px-3 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-50"><RefreshCw aria-hidden="true" className="size-3.5" /> Refresh Staff</button>
+          <button type="button" onClick={() => { setActionError(''); setSuccessNotice(''); setInviteTargetStaffId(''); setShowInviteForm(true) }} disabled={loading || saving} className="inline-flex h-9 items-center justify-center gap-1.5 border border-forest px-3 text-[10px] font-semibold text-forest hover:bg-forest/5 disabled:opacity-50"><Send aria-hidden="true" className="size-3.5" /> Invite Receptionist</button>
           <button type="button" onClick={() => { setActionError(''); setShowAddForm(true) }} disabled={loading || saving || !departments.length} title={!departments.length ? 'Add a department before adding staff' : undefined} className="inline-flex h-9 items-center justify-center gap-1.5 bg-forest px-3 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-not-allowed disabled:opacity-50"><Plus aria-hidden="true" className="size-3.5" /> Add Staff Member</button>
         </div>
       </header>
 
+      {successNotice && <p role="status" className="mb-4 border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-[10px] text-emerald-900">{successNotice}</p>}
       {(error || actionError) && (
         <div role="alert" className="mb-4 flex items-center justify-between gap-3 border border-rose-200 bg-rose-50 px-3 py-2.5 text-[10px] text-rose-800">
           <span>{actionError || error}</span>
@@ -253,18 +465,57 @@ export function AdminStaff() {
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[850px] border-collapse text-left">
-            <thead className="bg-stone-50 text-[9px] font-semibold tracking-[0.1em] text-muted"><tr><th className="px-3 py-3">STAFF MEMBER</th><th className="px-3 py-3">DEPARTMENT</th><th className="px-3 py-3">CONTACT</th><th className="px-3 py-3">SHIFT</th><th className="px-3 py-3">STATUS</th><th className="px-3 py-3">ACTION</th></tr></thead>
+          <table className="w-full min-w-[980px] border-collapse text-left">
+            <thead className="bg-stone-50 text-[9px] font-semibold tracking-[0.1em] text-muted"><tr><th className="px-3 py-3">STAFF MEMBER</th><th className="px-3 py-3">DEPARTMENT</th><th className="px-3 py-3">CONTACT</th><th className="px-3 py-3">SHIFT</th><th className="px-3 py-3">STATUS</th><th className="px-3 py-3">INVITATION</th><th className="px-3 py-3">ACTION</th></tr></thead>
             <tbody className="divide-y divide-stone-100">
-              {filteredStaff.map((member) => <tr key={member.id} onClick={() => setSelectedId(member.id)} className={`cursor-pointer text-[10px] hover:bg-paper/60 ${selectedMember?.id === member.id ? 'bg-amber-50/50' : ''}`}>
+              {filteredStaff.map((member) => {
+                const isReceptionist = member.role.trim().toLowerCase() === 'receptionist'
+                const invitationSent = invitedStaffIds.includes(member.id)
+                return <tr key={member.id} onClick={() => setSelectedId(member.id)} className={`cursor-pointer text-[10px] hover:bg-paper/60 ${selectedMember?.id === member.id ? 'bg-amber-50/50' : ''}`}>
                 <td className="px-3 py-3"><strong className="block font-medium text-ink">{member.name}</strong><span className="mt-1 block text-[9px] text-muted">{member.role} · {member.id}</span></td>
                 <td className="px-3 py-3 text-ink">{departments.find((department) => department.id === member.departmentId)?.name ?? 'Unassigned'}</td>
                 <td className="px-3 py-3"><span className="flex items-center gap-1.5 text-muted"><Mail aria-hidden="true" className="size-3 shrink-0" />{member.email}</span><span className="mt-1 flex items-center gap-1.5 text-muted"><Phone aria-hidden="true" className="size-3 shrink-0" />{member.phone}</span></td>
                 <td className="whitespace-nowrap px-3 py-3 text-ink">{member.shift}</td>
                 <td className="px-3 py-3"><span className={`inline-flex border px-2 py-1 text-[8px] font-semibold ${statusStyle(member.status)}`}>{member.status}</span></td>
-                <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}><button type="button" onClick={() => setEditingMember(member)} aria-label={`Edit ${member.name}`} className="inline-flex items-center gap-1 border border-stone-300 px-2 py-1.5 text-[9px] font-semibold text-ink hover:bg-stone-50"><Pencil aria-hidden="true" className="size-3" /> Edit</button></td>
-              </tr>)}
-              {!filteredStaff.length && <tr><td colSpan={6} className="px-4 py-10 text-center text-[10px] text-muted">No staff match these filters.</td></tr>}
+                <td className="px-3 py-3">{isReceptionist
+                  ? invitationSent
+                    ? <span className="inline-flex border border-emerald-200 bg-emerald-50 px-2 py-1 text-[8px] font-semibold text-emerald-800">Invitation sent</span>
+                    : <span className="text-[9px] text-muted">Not invited</span>
+                  : <span className="text-muted">—</span>}</td>
+                <td className="px-3 py-3" onClick={(event) => event.stopPropagation()}>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      aria-label={`Actions for ${member.name}`}
+                      aria-haspopup="menu"
+                      aria-expanded={openActionMenuStaffId === member.id}
+                      data-staff-action-trigger
+                      onClick={(event) => {
+                        if (openActionMenuStaffId === member.id) {
+                          closeActionMenu()
+                          return
+                        }
+                        const bounds = event.currentTarget.getBoundingClientRect()
+                        const menuWidth = 160
+                        const menuHeight = isReceptionist ? 124 : 84
+                        const top = bounds.bottom + menuHeight + 8 <= window.innerHeight
+                          ? bounds.bottom + 4
+                          : Math.max(8, bounds.top - menuHeight - 4)
+                        setActionMenuPosition({
+                          top,
+                          left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
+                        })
+                        setOpenActionMenuStaffId(member.id)
+                      }}
+                      className="grid size-8 place-items-center border border-stone-200 text-ink hover:border-forest hover:text-forest"
+                    >
+                      <Ellipsis aria-hidden="true" className="size-4" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              })}
+              {!filteredStaff.length && <tr><td colSpan={7} className="px-4 py-10 text-center text-[10px] text-muted">No staff match these filters.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -282,8 +533,54 @@ export function AdminStaff() {
       </aside>}
 
       {showDepartmentForm && <DepartmentForm onClose={() => setShowDepartmentForm(false)} onSave={saveDepartment} saving={saving} error={actionError} />}
+      {showInviteForm && <ReceptionistInviteForm staff={receptionistStaff} initialStaffMemberId={inviteTargetStaffId} onClose={() => setShowInviteForm(false)} onSave={(draft) => { void sendReceptionistInvitation(draft) }} saving={saving} error={actionError} />}
       {showAddForm && <StaffForm departments={departments} onClose={() => setShowAddForm(false)} onSave={(draft) => { void saveStaff(draft) }} saving={saving} error={actionError} />}
       {editingMember && <StaffForm member={editingMember} departments={departments} onClose={() => setEditingMember(null)} onSave={(draft) => { void saveStaff(draft, editingMember) }} saving={saving} error={actionError} />}
+      {actionMenuMember && actionMenuPosition && createPortal(
+        <div role="menu" aria-label={`${actionMenuMember.name} actions`} data-staff-action-menu className="fixed z-[80] w-40 border border-stone-200 bg-white p-1 shadow-xl" style={actionMenuPosition}>
+          {actionMenuMember.role.trim().toLowerCase() === 'receptionist' && (
+            <button type="button" role="menuitem" disabled={saving || invitedStaffIds.includes(actionMenuMember.id)} onClick={() => {
+              closeActionMenu()
+              setActionError('')
+              setSuccessNotice('')
+              setInviteTargetStaffId(actionMenuMember.id)
+              setShowInviteForm(true)
+            }} className="flex min-h-9 w-full items-center gap-2 px-2 text-left text-[10px] text-ink hover:bg-stone-50 disabled:opacity-50">
+              <Send aria-hidden="true" className="size-3.5 text-forest" />{invitedStaffIds.includes(actionMenuMember.id) ? 'Invitation sent' : 'Invite'}
+            </button>
+          )}
+          <button type="button" role="menuitem" disabled={saving} onClick={() => {
+            closeActionMenu()
+            setEditingMember(actionMenuMember)
+          }} className="flex min-h-9 w-full items-center gap-2 px-2 text-left text-[10px] text-ink hover:bg-stone-50 disabled:opacity-50">
+            <Pencil aria-hidden="true" className="size-3.5 text-muted" /> Edit
+          </button>
+          <button type="button" role="menuitem" disabled={saving} onClick={() => {
+            closeActionMenu()
+            setDeleteError('')
+            setDeletingMember(actionMenuMember)
+          }} className="flex min-h-9 w-full items-center gap-2 px-2 text-left text-[10px] text-rose-700 hover:bg-rose-50 disabled:opacity-50">
+            <Trash2 aria-hidden="true" className="size-3.5" /> Delete
+          </button>
+        </div>,
+        document.body,
+      )}
+      {deletingMember && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/50 p-4" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !saving) setDeletingMember(null)
+        }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="delete-staff-title" className="w-full max-w-md border border-stone-200 bg-white p-5 shadow-2xl">
+            <p className="text-[9px] font-semibold tracking-[0.15em] text-rose-700">REMOVE STAFF</p>
+            <h2 id="delete-staff-title" className="mt-2 font-display text-xl text-ink">Remove {deletingMember.name}?</h2>
+            <p className="mt-2 text-xs leading-5 text-muted">This removes the staff profile from this hotel. This action cannot be undone.</p>
+            {deleteError && <p role="alert" className="mt-4 border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">{deleteError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setDeletingMember(null)} disabled={saving} className="border border-stone-300 px-4 py-2 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-50">Cancel</button>
+              <button type="button" onClick={() => { void removeStaffMember(deletingMember) }} disabled={saving} className="inline-flex items-center gap-2 bg-rose-700 px-4 py-2 text-[10px] font-semibold text-white hover:bg-rose-800 disabled:cursor-wait disabled:opacity-50"><Trash2 aria-hidden="true" className="size-3.5" />{saving ? 'Removing…' : 'Remove Staff'}</button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   )
 }

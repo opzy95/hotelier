@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
+import { useHotelSession } from './HotelSessionContext'
 import { createRoom, createRoomType, deactivateRoom, deactivateRoomType, deleteRoomTypePhoto, fetchRoomInventory, updateRoom, updateRoomType, uploadRoomTypePhotos } from './adminRoomsApi'
 import { getRoomStatusCounts, getRoomStatusesForDate } from './adminRoomsData'
 import type { BedSetupItem, Room, RoomDraft, RoomStatus, RoomType, RoomTypeDraft } from './adminRoomsData'
@@ -290,12 +291,13 @@ function RoomTypeManagerDialog({ roomTypes, onClose, onSave, onDeactivate, onDel
   )
 }
 
-function RoomInspector({ room, onClose, onEdit, onDeactivate, saving }: {
+function RoomInspector({ room, onClose, onEdit, onDeactivate, saving, canManage }: {
   room: Room
   onClose: () => void
   onEdit: () => void
   onDeactivate: () => void
   saving: boolean
+  canManage: boolean
 }) {
   return (
     <aside className="self-start border border-stone-200 bg-white shadow-sm">
@@ -321,9 +323,9 @@ function RoomInspector({ room, onClose, onEdit, onDeactivate, saving }: {
           </div>
         </section>
         <div className="grid grid-cols-2 gap-2">
-          <button type="button" onClick={onEdit} className="col-span-2 inline-flex items-center justify-center gap-2 bg-forest px-3 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep"><Pencil aria-hidden="true" className="size-3" /> Edit Room Specifications</button>
+          {canManage && <button type="button" onClick={onEdit} className="col-span-2 inline-flex items-center justify-center gap-2 bg-forest px-3 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep"><Pencil aria-hidden="true" className="size-3" /> Edit Room Specifications</button>}
           {room.notes && <p className="col-span-2 text-[9px] text-muted">{room.notes}</p>}
-          {room.active && <button type="button" onClick={onDeactivate} disabled={saving} className="col-span-2 inline-flex items-center justify-center gap-2 border border-rose-200 px-3 py-2 text-[10px] font-semibold text-rose-800 hover:bg-rose-50 disabled:opacity-50"><Archive aria-hidden="true" className="size-3" /> Deactivate Room</button>}
+          {canManage && room.active && <button type="button" onClick={onDeactivate} disabled={saving} className="col-span-2 inline-flex items-center justify-center gap-2 border border-rose-200 px-3 py-2 text-[10px] font-semibold text-rose-800 hover:bg-rose-50 disabled:opacity-50"><Archive aria-hidden="true" className="size-3" /> Deactivate Room</button>}
           <button type="button" onClick={onClose} className="col-span-2 border border-stone-300 px-2 py-2 text-[9px] text-ink hover:bg-stone-50">Close Panel</button>
         </div>
       </div>
@@ -331,7 +333,7 @@ function RoomInspector({ room, onClose, onEdit, onDeactivate, saving }: {
   )
 }
 
-function RoomCard({ room, selected, onSelect, onEdit }: { room: Room; selected: boolean; onSelect: () => void; onEdit: () => void }) {
+function RoomCard({ room, selected, onSelect, onEdit, canManage }: { room: Room; selected: boolean; onSelect: () => void; onEdit: () => void; canManage: boolean }) {
   return (
     <article className={`min-w-0 overflow-hidden border bg-white shadow-sm transition-shadow hover:shadow-md ${selected ? 'border-amber-700 ring-1 ring-amber-700/20' : 'border-stone-200'}`}>
       <button type="button" onClick={onSelect} className="block w-full text-left" aria-label={`View details for ${room.name}`}>
@@ -370,13 +372,15 @@ function RoomCard({ room, selected, onSelect, onEdit }: { room: Room; selected: 
           {room.status === 'Reserved' ? 'View Reservation' : room.status === 'Occupied' ? 'View Stay' : 'View Details'}
           <span aria-hidden="true" className="ml-1">›</span>
         </button>
-        <button type="button" onClick={onEdit} aria-label={`Edit ${room.name}`} className="grid size-6 place-items-center text-muted hover:text-ink"><Pencil aria-hidden="true" className="size-3" /></button>
+        {canManage && <button type="button" onClick={onEdit} aria-label={`Edit ${room.name}`} className="grid size-6 place-items-center text-muted hover:text-ink"><Pencil aria-hidden="true" className="size-3" /></button>}
       </footer>
     </article>
   )
 }
 
 export function AdminRooms() {
+  const { managerRole } = useHotelSession()
+  const canManage = managerRole.toLowerCase() === 'manager'
   const {
     rooms: roomData,
     reservations,
@@ -547,13 +551,13 @@ export function AdminRooms() {
       <header className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div>
           <p className="text-[10px] font-semibold tracking-[0.17em] text-amber-800">PROPERTY INVENTORY</p>
-          <h1 className="mt-1 font-display text-2xl text-ink sm:text-3xl">Rooms Management</h1>
-          <p className="mt-1 max-w-2xl text-[11px] text-muted sm:text-[13px]">Configure room categories, then assign physical rooms and track their reservation-driven availability.</p>
+          <h1 className="mt-1 font-display text-2xl text-ink sm:text-3xl">{canManage ? 'Rooms Management' : 'Room Availability'}</h1>
+          <p className="mt-1 max-w-2xl text-[11px] text-muted sm:text-[13px]">{canManage ? 'Configure room categories, then assign physical rooms and track their reservation-driven availability.' : 'View room status and availability for guest stays.'}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        {canManage && <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => setDialog('types')} className="inline-flex items-center justify-center gap-2 border border-stone-300 bg-white px-3 py-2.5 text-[10px] font-semibold text-ink hover:bg-stone-50"><SlidersHorizontal aria-hidden="true" className="size-3.5" /> Manage Room Types</button>
           <button type="button" onClick={() => setDialog(activeRoomTypes.length ? 'room' : 'types')} disabled={isLoading} className="inline-flex items-center justify-center gap-2 bg-forest px-3 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:opacity-50"><CirclePlus aria-hidden="true" className="size-3.5" /> Add New Room</button>
-        </div>
+        </div>}
       </header>
 
       {(loadError || reservationsError || actionError) && (
@@ -642,7 +646,7 @@ export function AdminRooms() {
             <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-2 top-3 size-3 text-muted" />
           </label>
           <div className="flex items-center justify-between gap-2 sm:justify-end">
-            <label className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[9px] text-muted"><input type="checkbox" checked={includeInactiveRooms} disabled={isLoading} onChange={(event) => { setPage(1); refreshRoomInventory(event.target.checked) }} />Include inactive</label>
+            {canManage && <label className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[9px] text-muted"><input type="checkbox" checked={includeInactiveRooms} disabled={isLoading} onChange={(event) => { setPage(1); refreshRoomInventory(event.target.checked) }} />Include inactive</label>}
             <button type="button" onClick={() => { setSearch(''); setRoomType('All Room Types'); setStatusFilter('All Statuses'); setFloorFilter('All Floors'); setPage(1) }} className="whitespace-nowrap text-[9px] text-muted hover:text-ink">Clear Filters</button>
             <span className="whitespace-nowrap text-[9px] text-muted">Showing {filteredRooms.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredRooms.length)} of {filteredRooms.length}</span>
             <div className="flex border border-stone-200">
@@ -656,7 +660,7 @@ export function AdminRooms() {
       <div className={`grid items-start gap-4 ${selectedRoom ? 'xl:grid-cols-[minmax(0,1.8fr)_minmax(260px,.8fr)]' : 'grid-cols-1'}`}>
         <div className={listView ? 'grid gap-2' : 'grid grid-cols-1 gap-3 sm:grid-cols-2'}>
           {visibleRooms.map((room) => (
-            <RoomCard key={room.id} room={room} selected={room.id === selectedId} onSelect={() => setSelectedId(room.id)} onEdit={() => editRoom(room)} />
+            <RoomCard key={room.id} room={room} selected={room.id === selectedId} onSelect={() => setSelectedId(room.id)} onEdit={() => editRoom(room)} canManage={canManage} />
           ))}
           {isLoading && <div className="col-span-full border border-stone-200 bg-white px-5 py-12 text-center text-[11px] text-muted">Loading rooms from the hotel database…</div>}
           {!isLoading && visibleRooms.length === 0 && (
@@ -667,7 +671,7 @@ export function AdminRooms() {
             </div>
           )}
         </div>
-        {selectedRoom && <RoomInspector room={selectedRoom} onClose={() => setSelectedId('')} onEdit={() => editRoom(selectedRoom)} onDeactivate={() => { if (window.confirm(`Deactivate room ${selectedRoom.name}?`)) void archiveRoom(selectedRoom.id) }} saving={saving} />}
+        {selectedRoom && <RoomInspector room={selectedRoom} onClose={() => setSelectedId('')} onEdit={() => editRoom(selectedRoom)} onDeactivate={() => { if (window.confirm(`Deactivate room ${selectedRoom.name}?`)) void archiveRoom(selectedRoom.id) }} saving={saving} canManage={canManage} />}
       </div>
 
       <footer className="mt-4 flex flex-col gap-3 border border-stone-200 bg-white px-3 py-3 text-[9px] text-muted sm:flex-row sm:items-center sm:justify-between">
@@ -686,9 +690,9 @@ export function AdminRooms() {
         </div>
       </footer>
 
-      {dialog === 'room' && <RoomDialog roomTypes={activeRoomTypes} onClose={() => setDialog(null)} onSave={addRoom} saving={saving} error={actionError} />}
-      {editingRoom && <RoomEditDialog room={editingRoom} roomTypes={roomTypes} onClose={() => setEditingRoomId(null)} onSave={saveRoomChanges} saving={saving} error={actionError} />}
-      {dialog === 'types' && <RoomTypeManagerDialog roomTypes={roomTypes} onClose={() => setDialog(null)} onSave={saveRoomType} onDeactivate={archiveRoomType} onDeletePhoto={removeRoomTypePhoto} saving={saving} error={actionError} />}
+      {canManage && dialog === 'room' && <RoomDialog roomTypes={activeRoomTypes} onClose={() => setDialog(null)} onSave={addRoom} saving={saving} error={actionError} />}
+      {canManage && editingRoom && <RoomEditDialog room={editingRoom} roomTypes={roomTypes} onClose={() => setEditingRoomId(null)} onSave={saveRoomChanges} saving={saving} error={actionError} />}
+      {canManage && dialog === 'types' && <RoomTypeManagerDialog roomTypes={roomTypes} onClose={() => setDialog(null)} onSave={saveRoomType} onDeactivate={archiveRoomType} onDeletePhoto={removeRoomTypePhoto} saving={saving} error={actionError} />}
     </section>
   )
 }

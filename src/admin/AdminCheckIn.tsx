@@ -16,13 +16,15 @@ import {
   X,
 } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
+import { useHotelSession } from './HotelSessionContext'
 import { currencyMinorUnitScale, formatReservationDate, reservationBalanceDue, reservationCurrency, reservationPaidAmount } from './adminReservationsData'
 import type { Reservation } from './adminReservationsData'
 import {
+  checkInReservation,
+  checkOutReservation,
   createPaymentIdempotencyKey,
-  createReservation,
+  createWalkInReservation,
   recordReservationPayment,
-  updateReservationStatus,
 } from './adminReservationsApi'
 import type { PaymentMethod, ReservationDraft, ReservationPayment } from './adminReservationsApi'
 import { getAvailableRoomsForStay } from './adminRoomsData'
@@ -54,13 +56,14 @@ function statusClass(status: Reservation['folio']) {
   return 'bg-forest/10 text-forest'
 }
 
-function WalkInDialog({ date, reservations, rooms, inventoryLoading, onClose, onCreate }: {
+function WalkInDialog({ date, reservations, rooms, inventoryLoading, onClose, onCreate, canRecordPayment }: {
   date: string
   reservations: Reservation[]
   rooms: Room[]
   inventoryLoading: boolean
   onClose: () => void
   onCreate: (draft: ReservationDraft, payment?: ReservationPayment) => Promise<Reservation>
+  canRecordPayment: boolean
 }) {
   const [guest, setGuest] = useState('')
   const [email, setEmail] = useState('')
@@ -172,7 +175,7 @@ function WalkInDialog({ date, reservations, rooms, inventoryLoading, onClose, on
               <label className="block text-[10px] font-semibold tracking-wide text-ink">TELEPHONE *<input className={fieldClass} type="tel" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value)} required /></label>
               <label className="block text-[10px] font-semibold tracking-wide text-ink">EMAIL<input className={fieldClass} type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
             </div>
-            <section className="space-y-2 border border-stone-200 bg-white p-3">
+            {canRecordPayment && <section className="space-y-2 border border-stone-200 bg-white p-3">
               <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT RECEIVED</h3>
               <label className="block text-[10px] text-muted">Amount received (₦)<input className={fieldClass} type="number" min="0" max={amount} step="1" value={amountReceived} onChange={(event) => setAmountReceived(event.target.value)} /></label>
               {paidAmount > 0 && (
@@ -184,7 +187,7 @@ function WalkInDialog({ date, reservations, rooms, inventoryLoading, onClose, on
               )}
               <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Stay total · {nights} {nights === 1 ? 'night' : 'nights'}</span><strong className="text-ink">{reservationCurrency.format(amount)}</strong></div>
               <div className="flex justify-between gap-3 text-[11px]"><span className="text-muted">Balance due</span><strong className="text-amber-900">{reservationCurrency.format(Math.max(0, amount - paidAmount))}</strong></div>
-            </section>
+            </section>}
             {error && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-800">{error}</p>}
           </div>
           <footer className="flex items-center justify-between gap-3 border-t border-stone-200 bg-white px-5 py-4">
@@ -198,6 +201,14 @@ function WalkInDialog({ date, reservations, rooms, inventoryLoading, onClose, on
 }
 
 export function AdminCheckIn() {
+  const { managerRole, permissions } = useHotelSession()
+  const isManager = managerRole.toLowerCase() === 'manager'
+  const canCheckIn = isManager || permissions.includes('reservations.check_in')
+  const canCheckOut = isManager || permissions.includes('reservations.check_out')
+  const canCreateWalkIn = isManager || (permissions.includes('reservations.create') && canCheckIn)
+  const canRecordPayments = isManager || permissions.includes('payments.walk_in.create')
+  const canRecordWalkInPayment = canRecordPayments
+  const canRecordExistingPayments = canRecordPayments
   const {
     reservations,
     setReservations,
@@ -207,6 +218,7 @@ export function AdminCheckIn() {
     rooms,
     roomLoading,
     roomError,
+    refreshRoomInventory,
   } = useAdminReservations()
   const [selectedDate, setSelectedDate] = useState(todayKey)
   const [activeTab, setActiveTab] = useState<OperationsTab>('Arrivals')
@@ -264,6 +276,10 @@ export function AdminCheckIn() {
   }
 
   async function changeReservationStatus(reservation: Reservation, status: 'checked_in' | 'checked_out', nextTab: OperationsTab) {
+    if ((status === 'checked_in' && !canCheckIn) || (status === 'checked_out' && !canCheckOut)) {
+      setOperationError('Your account does not have permission to change this guest’s check-in status.')
+      return
+    }
     const hotelId = sessionStorage.getItem('selectedHotelId') ?? ''
     if (!hotelId) {
       setOperationError('Select a hotel before updating a guest folio.')
@@ -277,7 +293,9 @@ export function AdminCheckIn() {
     setOperationError('')
     setPendingActionId(reservation.id)
     try {
-      const updated = await updateReservationStatus(hotelId, reservation.id, status)
+      const updated = status === 'checked_in'
+        ? await checkInReservation(hotelId, reservation.id)
+        : await checkOutReservation(hotelId, reservation.id)
       setReservations((current) => current.map((item) => item.id === updated.id ? updated : item))
       setSelectedReference(updated.reference)
       setActiveTab(nextTab)
@@ -289,17 +307,19 @@ export function AdminCheckIn() {
   }
 
   async function createWalkIn(draft: ReservationDraft, initialPayment?: ReservationPayment) {
+    if (!canCreateWalkIn) throw new Error('Your account does not have permission to create walk-in bookings.')
+    if (initialPayment && !canRecordWalkInPayment) throw new Error('Your account does not have permission to record a walk-in payment.')
     const hotelId = sessionStorage.getItem('selectedHotelId') ?? ''
     if (!hotelId) throw new Error('Select a hotel before adding a walk-in guest.')
 
     setOperationError('')
-    const created = await createReservation(hotelId, draft)
+    const created = await createWalkInReservation(hotelId, draft)
     setReservations((current) => [created, ...current])
 
     let checkedIn: Reservation
     try {
       if (!created.id) throw new Error('The created reservation is missing its database ID.')
-      checkedIn = await updateReservationStatus(hotelId, created.id, 'checked_in')
+      checkedIn = await checkInReservation(hotelId, created.id)
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'The check-in could not be completed.'
       setOperationError(`Walk-in folio ${created.reference} was created, but check-in failed: ${reason}`)
@@ -340,6 +360,10 @@ export function AdminCheckIn() {
 
   async function recordPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!canRecordExistingPayments) {
+      setPaymentError('Your account cannot record payments for existing reservations.')
+      return
+    }
     if (!selectedReservation) return
 
     const amountReceived = Number(paymentAmount)
@@ -410,14 +434,18 @@ export function AdminCheckIn() {
             <button type="button" onClick={() => shiftDate(1)} aria-label="Next day" className="grid size-8 place-items-center text-muted hover:bg-stone-50 hover:text-ink"><ChevronRight aria-hidden="true" className="size-4" /></button>
           </div>
           <button type="button" onClick={() => setSelectedDate(todayKey())} className="h-9 border border-stone-300 bg-white px-3 text-[10px] font-semibold text-ink hover:bg-stone-50">Today</button>
-          <button type="button" onClick={() => setShowWalkIn(true)} className="inline-flex h-9 items-center gap-1.5 bg-amber-900 px-3 text-[10px] font-semibold text-white hover:bg-amber-950"><Plus aria-hidden="true" className="size-3.5" /> Add Check In</button>
+          {canCreateWalkIn && <button type="button" onClick={() => setShowWalkIn(true)} className="inline-flex h-9 items-center gap-1.5 bg-amber-900 px-3 text-[10px] font-semibold text-white hover:bg-amber-950"><Plus aria-hidden="true" className="size-3.5" /> Add Check In</button>}
         </div>
       </header>
 
       {(operationError || reservationsError || roomError) && (
-        <p role="alert" className="mb-3 border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-medium text-rose-800">
-          {operationError || reservationsError || roomError}
-        </p>
+        <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-2 border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-medium text-rose-800">
+          <span>{operationError || reservationsError || roomError}</span>
+          <div className="flex gap-3">
+            {reservationsError && <button type="button" onClick={refreshReservations} className="shrink-0 font-semibold underline underline-offset-2">Retry reservations</button>}
+            {roomError && <button type="button" onClick={() => refreshRoomInventory()} className="shrink-0 font-semibold underline underline-offset-2">Retry rooms</button>}
+          </div>
+        </div>
       )}
       {reservationsLoading && <p role="status" className="mb-3 text-[10px] text-muted">Loading reservations…</p>}
 
@@ -478,8 +506,8 @@ export function AdminCheckIn() {
                       <td className="px-3 py-3.5 whitespace-nowrap text-ink">{reservation.adults + reservation.children}<span className="mt-1 block text-[9px] text-muted">{reservation.adults} Adults · {reservation.children} Children</span></td>
                       <td className="px-3 py-3.5"><span className={`inline-flex whitespace-nowrap px-2 py-1 text-[8px] font-semibold ${statusClass(reservation.folio)}`}>{reservation.folio}</span><span className="mt-1 block text-[9px] text-muted">{reservation.payment}</span></td>
                       <td className="px-3 py-3.5" onClick={(event) => event.stopPropagation()}>
-                        {reservation.folio === 'Checked In' && <button type="button" onClick={() => updateCheckOut(reservation)} disabled={pendingActionId === reservation.id} className="whitespace-nowrap border border-forest px-2.5 py-1.5 text-[9px] font-semibold text-forest hover:bg-forest hover:text-white disabled:cursor-wait disabled:opacity-50">Check Out</button>}
-                        {['Confirmed', 'Pending Payment'].includes(reservation.folio) && <button type="button" onClick={() => updateCheckIn(reservation)} disabled={reservation.checkIn > selectedDate || pendingActionId === reservation.id} className="whitespace-nowrap border border-amber-800 px-2.5 py-1.5 text-[9px] font-semibold text-amber-900 hover:bg-amber-900 hover:text-white disabled:cursor-not-allowed disabled:border-stone-300 disabled:text-stone-400">Check In</button>}
+                        {canCheckOut && reservation.folio === 'Checked In' && <button type="button" onClick={() => updateCheckOut(reservation)} disabled={pendingActionId === reservation.id} className="whitespace-nowrap border border-forest px-2.5 py-1.5 text-[9px] font-semibold text-forest hover:bg-forest hover:text-white disabled:cursor-wait disabled:opacity-50">Check Out</button>}
+                        {canCheckIn && ['Confirmed', 'Pending Payment'].includes(reservation.folio) && <button type="button" onClick={() => updateCheckIn(reservation)} disabled={reservation.checkIn > selectedDate || pendingActionId === reservation.id} className="whitespace-nowrap border border-amber-800 px-2.5 py-1.5 text-[9px] font-semibold text-amber-900 hover:bg-amber-900 hover:text-white disabled:cursor-not-allowed disabled:border-stone-300 disabled:text-stone-400">Check In</button>}
                       </td>
                     </tr>
                   ))}
@@ -519,7 +547,7 @@ export function AdminCheckIn() {
                   <div className="mt-2 flex justify-between gap-3 text-[10px]"><span className="text-muted">Paid</span><strong className="text-emerald-800">{reservationCurrency.format(reservationPaidAmount(selectedReservation))}</strong></div>
                   <div className="mt-2 flex justify-between gap-3 border-t border-stone-200 pt-2 text-[10px]"><span className="text-muted">Balance due</span><strong className={reservationBalanceDue(selectedReservation) ? 'text-amber-900' : 'text-ink'}>{reservationCurrency.format(reservationBalanceDue(selectedReservation))}</strong></div>
                   {reservationBalanceDue(selectedReservation) > 0 && <p className="mt-2 flex items-center gap-1 text-[9px] text-amber-900"><Clock3 aria-hidden="true" className="size-3 shrink-0" /> Outstanding balance to settle at front desk.</p>}
-                  {reservationBalanceDue(selectedReservation) > 0 && selectedReservation.folio !== 'Cancelled' && (
+                  {canRecordExistingPayments && reservationBalanceDue(selectedReservation) > 0 && selectedReservation.folio !== 'Cancelled' && (
                     showPaymentForm ? (
                       <form onSubmit={recordPayment} className="mt-3 space-y-2 border-t border-stone-200 pt-3">
                         <label className="block text-[9px] font-semibold text-ink">AMOUNT RECEIVED (₦)
@@ -542,9 +570,9 @@ export function AdminCheckIn() {
                   )}
                 </section>
                 <div className="grid grid-cols-2 gap-2">
-                  {selectedReservation.folio === 'Checked In' ? (
+                  {canCheckOut && selectedReservation.folio === 'Checked In' ? (
                     <button type="button" onClick={() => updateCheckOut(selectedReservation)} disabled={pendingActionId === selectedReservation.id} className="col-span-2 inline-flex min-h-10 items-center justify-center gap-2 bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-50"><DoorOpen aria-hidden="true" className="size-3.5" /> Complete Check-out</button>
-                  ) : ['Confirmed', 'Pending Payment'].includes(selectedReservation.folio) ? (
+                  ) : canCheckIn && ['Confirmed', 'Pending Payment'].includes(selectedReservation.folio) ? (
                     <button type="button" onClick={() => updateCheckIn(selectedReservation)} disabled={selectedReservation.checkIn > selectedDate || pendingActionId === selectedReservation.id} className="col-span-2 inline-flex min-h-10 items-center justify-center gap-2 bg-amber-900 px-3 py-2 text-[10px] font-semibold text-white hover:bg-amber-950 disabled:cursor-not-allowed disabled:bg-stone-300"><Check aria-hidden="true" className="size-3.5" /> Confirm &amp; Complete Check-in</button>
                   ) : (
                     <span className="col-span-2 py-2 text-center text-[9px] text-muted">This folio has no pending front desk action.</span>
@@ -558,7 +586,7 @@ export function AdminCheckIn() {
           )}
         </aside>
       </div>
-      {showWalkIn && <WalkInDialog date={selectedDate} reservations={reservations} rooms={rooms} inventoryLoading={reservationsLoading || roomLoading} onClose={() => setShowWalkIn(false)} onCreate={createWalkIn} />}
+      {showWalkIn && canCreateWalkIn && <WalkInDialog date={selectedDate} reservations={reservations} rooms={rooms} inventoryLoading={reservationsLoading || roomLoading} onClose={() => setShowWalkIn(false)} onCreate={createWalkIn} canRecordPayment={canRecordWalkInPayment} />}
     </section>
   )
 }
