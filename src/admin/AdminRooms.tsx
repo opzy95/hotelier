@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import {
   Archive,
   BedDouble,
+  CalendarDays,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -24,8 +25,11 @@ import {
 import { useAdminReservations } from './AdminReservationsContext'
 import { useHotelSession } from './HotelSessionContext'
 import { createRoom, createRoomType, deactivateRoom, deactivateRoomType, deleteRoomTypePhoto, fetchRoomInventory, updateRoom, updateRoomType, uploadRoomTypePhotos } from './adminRoomsApi'
+import { extendReservationStay } from './adminReservationsApi'
+import { AdminStayExtensionDialog } from './AdminStayExtensionDialog'
 import { getRoomStatusCounts, getRoomStatusesForDate } from './adminRoomsData'
 import type { BedSetupItem, Room, RoomDraft, RoomStatus, RoomType, RoomTypeDraft } from './adminRoomsData'
+import type { Reservation } from './adminReservationsData'
 
 const statusDetails: Record<RoomStatus, { color: string; accent: string }> = {
   Available: { color: 'border-emerald-200 bg-emerald-50 text-emerald-800', accent: 'bg-emerald-600' },
@@ -49,6 +53,30 @@ function formatCurrency(amount: number, currencyCode: string) {
 
 function formatBedSetup(beds: BedSetupItem[]) {
   return beds.map(({ type, count }) => `${count} ${type} ${count === 1 ? 'bed' : 'beds'}`).join(', ')
+}
+
+function normalizeRoomReference(value: string | undefined) {
+  return value?.trim().toLowerCase().replace(/^room\s+/, '').replace(/^#/, '')
+}
+
+function findInHouseReservationForRoom(room: Room | undefined, reservations: Reservation[]) {
+  if (!room) return undefined
+  const referencedStay = reservations.find((reservation) => (
+    Boolean(room.note && reservation.reference === room.note)
+  ))
+  if (referencedStay) return referencedStay
+
+  const roomReferences = [room.id, room.name]
+    .map(normalizeRoomReference)
+    .filter((reference): reference is string => Boolean(reference))
+  return reservations.find((reservation) => (
+    reservation.folio === 'Checked In'
+    && [reservation.assignedRoomId, reservation.assignedRoomName]
+      .some((reference) => {
+        const normalizedReference = normalizeRoomReference(reference)
+        return Boolean(normalizedReference && roomReferences.includes(normalizedReference))
+      })
+  ))
 }
 
 function RoomStatusBadge({ status }: { status: RoomStatus }) {
@@ -291,11 +319,12 @@ function RoomTypeManagerDialog({ roomTypes, onClose, onSave, onDeactivate, onDel
   )
 }
 
-function RoomInspector({ room, onClose, onEdit, onDeactivate, saving, canManage }: {
+function RoomInspector({ room, onClose, onEdit, onDeactivate, onExtendStay, saving, canManage }: {
   room: Room
   onClose: () => void
   onEdit: () => void
   onDeactivate: () => void
+  onExtendStay?: () => void
   saving: boolean
   canManage: boolean
 }) {
@@ -324,6 +353,7 @@ function RoomInspector({ room, onClose, onEdit, onDeactivate, saving, canManage 
         </section>
         <div className="grid grid-cols-2 gap-2">
           {canManage && <button type="button" onClick={onEdit} className="col-span-2 inline-flex items-center justify-center gap-2 bg-forest px-3 py-2.5 text-[10px] font-semibold text-white hover:bg-forest-deep"><Pencil aria-hidden="true" className="size-3" /> Edit Room Specifications</button>}
+          {room.status === 'Occupied' && <button type="button" onClick={onExtendStay} disabled={!onExtendStay} title={!onExtendStay ? 'No linked in-house reservation was found for this room.' : undefined} className="col-span-2 inline-flex items-center justify-center gap-2 border border-amber-200 bg-amber-50 px-3 py-2.5 text-[10px] font-semibold text-amber-950 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"><CalendarDays aria-hidden="true" className="size-3" /> Extend Stay</button>}
           {room.notes && <p className="col-span-2 text-[9px] text-muted">{room.notes}</p>}
           {canManage && room.active && <button type="button" onClick={onDeactivate} disabled={saving} className="col-span-2 inline-flex items-center justify-center gap-2 border border-rose-200 px-3 py-2 text-[10px] font-semibold text-rose-800 hover:bg-rose-50 disabled:opacity-50"><Archive aria-hidden="true" className="size-3" /> Deactivate Room</button>}
           <button type="button" onClick={onClose} className="col-span-2 border border-stone-300 px-2 py-2 text-[9px] text-ink hover:bg-stone-50">Close Panel</button>
@@ -333,7 +363,14 @@ function RoomInspector({ room, onClose, onEdit, onDeactivate, saving, canManage 
   )
 }
 
-function RoomCard({ room, selected, onSelect, onEdit, canManage }: { room: Room; selected: boolean; onSelect: () => void; onEdit: () => void; canManage: boolean }) {
+function RoomCard({ room, selected, onSelect, onEdit, onExtendStay, canManage }: {
+  room: Room
+  selected: boolean
+  onSelect: () => void
+  onEdit: () => void
+  onExtendStay?: () => void
+  canManage: boolean
+}) {
   return (
     <article className={`min-w-0 overflow-hidden border bg-white shadow-sm transition-shadow hover:shadow-md ${selected ? 'border-amber-700 ring-1 ring-amber-700/20' : 'border-stone-200'}`}>
       <button type="button" onClick={onSelect} className="block w-full text-left" aria-label={`View details for ${room.name}`}>
@@ -367,11 +404,12 @@ function RoomCard({ room, selected, onSelect, onEdit, canManage }: { room: Room;
           </div>
         </div>
       </button>
-      <footer className="flex items-center justify-between border-t border-stone-100 px-3 py-2">
+      <footer className="flex items-center gap-2 border-t border-stone-100 px-3 py-2">
         <button type="button" onClick={onSelect} className="text-[9px] font-medium text-ink hover:text-amber-800">
           {room.status === 'Reserved' ? 'View Reservation' : room.status === 'Occupied' ? 'View Stay' : 'View Details'}
           <span aria-hidden="true" className="ml-1">›</span>
         </button>
+        {room.status === 'Occupied' && <button type="button" onClick={onExtendStay} disabled={!onExtendStay} title={!onExtendStay ? 'No linked in-house reservation was found for this room.' : undefined} className="ml-auto border border-amber-200 bg-amber-50 px-2 py-1 text-[9px] font-semibold text-amber-950 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">Extend Stay</button>}
         {canManage && <button type="button" onClick={onEdit} aria-label={`Edit ${room.name}`} className="grid size-6 place-items-center text-muted hover:text-ink"><Pencil aria-hidden="true" className="size-3" /></button>}
       </footer>
     </article>
@@ -384,6 +422,7 @@ export function AdminRooms() {
   const {
     rooms: roomData,
     reservations,
+    setReservations,
     reservationsLoading,
     reservationsError,
     refreshReservations,
@@ -404,8 +443,10 @@ export function AdminRooms() {
   const [operationalDate] = useState(currentDateKey)
   const [page, setPage] = useState(1)
   const [listView, setListView] = useState(false)
-  const [dialog, setDialog] = useState<'room' | 'types' | null>(null)
+  const [dialog, setDialog] = useState<'room' | 'types' | 'extend' | null>(null)
   const [editingRoomId, setEditingRoomId] = useState<string | null>(null)
+  const [extensionSaving, setExtensionSaving] = useState(false)
+  const [extensionError, setExtensionError] = useState('')
 
   useEffect(() => {
     refreshReservations()
@@ -417,6 +458,7 @@ export function AdminRooms() {
   )
   const activeRooms = operationalRooms.filter((room) => room.active)
   const selectedRoom = operationalRooms.find((room) => room.id === selectedId)
+  const selectedRoomReservation = findInHouseReservationForRoom(selectedRoom, reservations)
   const editingRoom = roomData.find((room) => room.id === editingRoomId)
   const counts = getRoomStatusCounts(activeRooms)
 
@@ -536,6 +578,27 @@ export function AdminRooms() {
       setActionError(error instanceof Error ? error.message : 'Could not deactivate this room.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function saveStayExtension(checkOut: string) {
+    if (!hotelId || !selectedRoomReservation?.id) {
+      setExtensionError('Could not extend the stay because the hotel or reservation ID is missing.')
+      return
+    }
+
+    setExtensionSaving(true)
+    setExtensionError('')
+    try {
+      const updatedReservation = await extendReservationStay(hotelId, selectedRoomReservation.id, checkOut)
+      setReservations((current) => current.map((reservation) => (
+        reservation.id === updatedReservation.id ? updatedReservation : reservation
+      )))
+      setDialog(null)
+    } catch (error: unknown) {
+      setExtensionError(error instanceof Error ? error.message : 'Could not extend this stay.')
+    } finally {
+      setExtensionSaving(false)
     }
   }
 
@@ -660,7 +723,15 @@ export function AdminRooms() {
       <div className={`grid items-start gap-4 ${selectedRoom ? 'xl:grid-cols-[minmax(0,1.8fr)_minmax(260px,.8fr)]' : 'grid-cols-1'}`}>
         <div className={listView ? 'grid gap-2' : 'grid grid-cols-1 gap-3 sm:grid-cols-2'}>
           {visibleRooms.map((room) => (
-            <RoomCard key={room.id} room={room} selected={room.id === selectedId} onSelect={() => setSelectedId(room.id)} onEdit={() => editRoom(room)} canManage={canManage} />
+            <RoomCard
+              key={room.id}
+              room={room}
+              selected={room.id === selectedId}
+              onSelect={() => setSelectedId(room.id)}
+              onEdit={() => editRoom(room)}
+              onExtendStay={findInHouseReservationForRoom(room, reservations) ? () => { setSelectedId(room.id); setExtensionError(''); setDialog('extend') } : undefined}
+              canManage={canManage}
+            />
           ))}
           {isLoading && <div className="col-span-full border border-stone-200 bg-white px-5 py-12 text-center text-[11px] text-muted">Loading rooms from the hotel database…</div>}
           {!isLoading && visibleRooms.length === 0 && (
@@ -671,7 +742,7 @@ export function AdminRooms() {
             </div>
           )}
         </div>
-        {selectedRoom && <RoomInspector room={selectedRoom} onClose={() => setSelectedId('')} onEdit={() => editRoom(selectedRoom)} onDeactivate={() => { if (window.confirm(`Deactivate room ${selectedRoom.name}?`)) void archiveRoom(selectedRoom.id) }} saving={saving} canManage={canManage} />}
+        {selectedRoom && <RoomInspector room={selectedRoom} onClose={() => setSelectedId('')} onEdit={() => editRoom(selectedRoom)} onDeactivate={() => { if (window.confirm(`Deactivate room ${selectedRoom.name}?`)) void archiveRoom(selectedRoom.id) }} onExtendStay={selectedRoomReservation ? () => { setExtensionError(''); setDialog('extend') } : undefined} saving={saving} canManage={canManage} />}
       </div>
 
       <footer className="mt-4 flex flex-col gap-3 border border-stone-200 bg-white px-3 py-3 text-[9px] text-muted sm:flex-row sm:items-center sm:justify-between">
@@ -693,6 +764,9 @@ export function AdminRooms() {
       {canManage && dialog === 'room' && <RoomDialog roomTypes={activeRoomTypes} onClose={() => setDialog(null)} onSave={addRoom} saving={saving} error={actionError} />}
       {canManage && editingRoom && <RoomEditDialog room={editingRoom} roomTypes={roomTypes} onClose={() => setEditingRoomId(null)} onSave={saveRoomChanges} saving={saving} error={actionError} />}
       {canManage && dialog === 'types' && <RoomTypeManagerDialog roomTypes={roomTypes} onClose={() => setDialog(null)} onSave={saveRoomType} onDeactivate={archiveRoomType} onDeletePhoto={removeRoomTypePhoto} saving={saving} error={actionError} />}
+      {dialog === 'extend' && selectedRoomReservation && (
+        <AdminStayExtensionDialog reservation={selectedRoomReservation} onClose={() => setDialog(null)} onSave={(checkOut) => { void saveStayExtension(checkOut) }} saving={extensionSaving} error={extensionError} />
+      )}
     </section>
   )
 }

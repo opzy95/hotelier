@@ -19,7 +19,7 @@ import { useAdminReservations } from './AdminReservationsContext'
 import { useHotelSession } from './HotelSessionContext'
 import { currencyMinorUnitScale, reservationBalanceDue, reservationPaidAmount } from './adminReservationsData'
 import type { FolioStatus, PaymentStatus, Reservation } from './adminReservationsData'
-import { createPaymentIdempotencyKey, createReservation as createReservationRequest, fetchReservationAvailability, fetchReservations, fetchReservationPayments, recordReservationPayment, updateReservationStatus } from './adminReservationsApi'
+import { createPaymentIdempotencyKey, createReservation as createReservationRequest, extendReservationStay, fetchReservationAvailability, fetchReservations, fetchReservationPayments, recordReservationPayment, updateReservationStatus } from './adminReservationsApi'
 import type { PaymentMethod, ReservationAvailability, ReservationDraft, ReservationPayment, ReservationPaymentRecord } from './adminReservationsApi'
 import type { Room, RoomType } from './adminRoomsData'
 
@@ -75,6 +75,12 @@ function nightsBetween(checkIn: string, checkOut: string) {
   if (!checkIn || !checkOut) return 1
   const difference = new Date(`${checkOut}T12:00:00`).getTime() - new Date(`${checkIn}T12:00:00`).getTime()
   return Math.max(1, Math.ceil(difference / 86400000))
+}
+
+function checkoutAfterNights(checkOut: string, nights: number) {
+  const date = new Date(`${checkOut}T12:00:00`)
+  date.setDate(date.getDate() + nights)
+  return date.toISOString().slice(0, 10)
 }
 
 function shortDate(value: string) {
@@ -439,14 +445,25 @@ function ReservationDialog({ onClose, onCreate, hotelId, inventory, roomTypes, r
   )
 }
 
-function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecordPayment, pendingPayment, canRecordPayment }: {
+type ReservationExtensionSummary = {
+  reservationId: string
+  addedCharge: number
+  outstandingBefore: number
+  remainingAfter: number
+}
+
+function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecordPayment, onExtendStay, pendingPayment, canRecordPayment, extensionSummary, extensionSaving, extensionError }: {
   reservation: Reservation
   inventory: Room[]
   hotelId: string
   onClose: () => void
   onRecordPayment: (payment: ReservationPayment) => Promise<void>
+  onExtendStay: (checkOut: string) => Promise<boolean>
   pendingPayment?: ReservationPayment
   canRecordPayment: boolean
+  extensionSummary?: ReservationExtensionSummary
+  extensionSaving: boolean
+  extensionError: string
 }) {
   const currency = reservation.currency ?? 'NGN'
   const minorUnitScale = currencyMinorUnitScale(currency)
@@ -455,6 +472,8 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
   const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(pendingPayment?.idempotencyKey ?? createPaymentIdempotencyKey)
   const [paymentError, setPaymentError] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
+  const [showExtensionForm, setShowExtensionForm] = useState(false)
+  const [extraStayNights, setExtraStayNights] = useState('1')
   const [paymentHistoryReload, setPaymentHistoryReload] = useState(0)
   const [paymentHistoryState, setPaymentHistoryState] = useState<{
     queryKey: string
@@ -489,6 +508,9 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
     return () => { cancelled = true }
   }, [canRecordPayment, hotelId, paymentHistoryQueryKey, reservation.id])
   const balance = reservationBalanceDue(reservation)
+  const additionalNights = Number(extraStayNights)
+  const validAdditionalNights = Number.isInteger(additionalNights) && additionalNights >= 1 && additionalNights <= 30
+  const extendedCheckOut = checkoutAfterNights(reservation.checkOut, validAdditionalNights ? additionalNights : 1)
 
   async function submitPayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -516,9 +538,18 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
     }
   }
 
+  async function submitExtension(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!validAdditionalNights) return
+    if (await onExtendStay(extendedCheckOut)) {
+      setShowExtensionForm(false)
+      setExtraStayNights('1')
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onMouseDown={onClose}>
-      <section role="dialog" aria-modal="true" aria-labelledby="reservation-details-title" className="w-full max-w-lg rounded-sm bg-white p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+      <section role="dialog" aria-modal="true" aria-labelledby="reservation-details-title" className="max-h-[65vh] w-full max-w-lg overflow-y-auto rounded-sm bg-white p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-[9px] font-semibold tracking-[0.15em] text-amber-800">RESERVATION DETAILS</p>
@@ -539,6 +570,39 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
           <div className="py-3"><dt className="text-[10px] text-muted">Remaining balance</dt><dd className={`mt-1 text-xs font-bold ${reservationBalanceDue(reservation) ? 'text-amber-900' : 'text-ink'}`}>{formatAmount(reservationBalanceDue(reservation), reservation.currency)}</dd></div>
           <div className="py-3 sm:col-span-2"><dt className="text-[10px] text-muted">Payment / folio</dt><dd className="mt-1 text-xs text-ink">{reservation.payment} / {reservation.folio}</dd></div>
         </dl>
+        {reservation.folio === 'Checked In' && <section className="mt-4 border border-amber-200 bg-amber-50/60 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-[10px] font-semibold tracking-wide text-amber-950">IN-HOUSE STAY</h3>
+              <p className="mt-1 text-[9px] text-muted">Extend the checkout date for this occupied reservation.</p>
+            </div>
+            <button type="button" onClick={() => setShowExtensionForm((current) => !current)} className="inline-flex items-center gap-1.5 border border-amber-300 bg-white px-3 py-2 text-[10px] font-semibold text-amber-950 hover:bg-amber-100"><CalendarDays aria-hidden="true" className="size-3.5" /> {showExtensionForm ? 'Close Extension' : 'Extend Stay'}</button>
+          </div>
+        </section>}
+        {showExtensionForm && reservation.folio === 'Checked In' && <form onSubmit={(event) => { void submitExtension(event) }} className="mt-3 space-y-3 border border-amber-200 bg-white p-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="text-[10px] font-semibold tracking-wide text-ink">CURRENT CHECK-OUT
+              <input className="mt-1.5 w-full border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-ink" type="date" value={reservation.checkOut} readOnly />
+            </label>
+            <label className="text-[10px] font-semibold tracking-wide text-ink">ADD NIGHTS
+              <input className="mt-1.5 w-full border border-stone-200 bg-white px-3 py-2 text-xs text-ink outline-none focus:border-amber-800" type="number" min="1" max="30" value={extraStayNights} onChange={(event) => setExtraStayNights(event.target.value)} required disabled={extensionSaving} />
+            </label>
+          </div>
+          <p className="text-[10px] text-muted">New check-out: <strong className="text-ink">{shortDate(extendedCheckOut)} {extendedCheckOut.slice(0, 4)}</strong>. The server checks availability and recalculates the total and balance.</p>
+          {extensionError && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">{extensionError}</p>}
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setShowExtensionForm(false)} disabled={extensionSaving} className="border border-stone-300 px-3 py-2 text-[10px] font-semibold text-ink hover:bg-stone-50 disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={extensionSaving || !validAdditionalNights} className="bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-not-allowed disabled:opacity-50">{extensionSaving ? 'Extending…' : 'Confirm Extension'}</button>
+          </div>
+        </form>}
+        {extensionSummary && extensionSummary.reservationId === reservation.id && <section className="mt-4 border border-emerald-200 bg-emerald-50/60 p-3">
+          <h3 className="text-[10px] font-semibold tracking-wide text-emerald-950">EXTENSION PAYMENT SUMMARY</h3>
+          <dl className="mt-2 space-y-1.5 text-[10px]">
+            <div className="flex items-center justify-between gap-3"><dt className="text-muted">Added stay charge</dt><dd className="font-semibold text-ink">{formatAmount(extensionSummary.addedCharge, currency)}</dd></div>
+            <div className="flex items-center justify-between gap-3"><dt className="text-muted">Outstanding before extension</dt><dd className="font-semibold text-ink">{formatAmount(extensionSummary.outstandingBefore, currency)}</dd></div>
+            <div className="flex items-center justify-between gap-3 border-t border-emerald-200 pt-1.5"><dt className="font-bold text-ink">Total remaining to pay</dt><dd className="font-bold text-emerald-900">{formatAmount(extensionSummary.remainingAfter, currency)}</dd></div>
+          </dl>
+        </section>}
         {canRecordPayment && <section className="mt-4 border border-stone-200 bg-white p-3">
           <h3 className="text-[10px] font-semibold tracking-wide text-ink">PAYMENT HISTORY</h3>
           {paymentHistoryLoading && <p className="mt-2 text-[10px] text-muted">Loading payment history…</p>}
@@ -641,8 +705,11 @@ export function AdminReservations() {
   const [page, setPage] = useState(1)
   const [createOpen, setCreateOpen] = useState(false)
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null)
+  const [extensionSummary, setExtensionSummary] = useState<ReservationExtensionSummary | null>(null)
   const [reservationToCancel, setReservationToCancel] = useState<Reservation | null>(null)
   const [pendingPayments, setPendingPayments] = useState<Record<string, ReservationPayment>>({})
+  const [extensionSaving, setExtensionSaving] = useState(false)
+  const [extensionError, setExtensionError] = useState('')
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250)
@@ -794,6 +861,43 @@ export function AdminReservations() {
       return next
     })
     setSelectedReservation(updated)
+  }
+
+  async function extendStay(reservation: Reservation, checkOut: string): Promise<boolean> {
+    if (!reservation.id) {
+      setExtensionError('This reservation is missing its database ID and cannot be extended.')
+      return false
+    }
+    if (!hotelId) {
+      setExtensionError('Select a hotel before extending this stay.')
+      return false
+    }
+
+    setExtensionSaving(true)
+    setExtensionError('')
+    try {
+      const updated = await extendReservationStay(hotelId, reservation.id, checkOut)
+      if (!updated.id) throw new Error('The hotel API returned an extended reservation without an ID.')
+      setExtensionSummary({
+        reservationId: updated.id,
+        addedCharge: Math.max(0, updated.amount - reservation.amount),
+        outstandingBefore: reservationBalanceDue(reservation),
+        remainingAfter: reservationBalanceDue(updated),
+      })
+      setAllReservations((current) => current.map((reservation) => (
+        reservation.id === updated.id ? updated : reservation
+      )))
+      setRows((current) => current.map((reservation) => (
+        reservation.id === updated.id ? updated : reservation
+      )))
+      setSelectedReservation(updated)
+      return true
+    } catch (error: unknown) {
+      setExtensionError(error instanceof Error ? error.message : 'Could not extend this stay.')
+      return false
+    } finally {
+      setExtensionSaving(false)
+    }
   }
 
   async function cancelReservation() {
@@ -977,8 +1081,12 @@ export function AdminReservations() {
         hotelId={hotelId}
         onClose={() => setSelectedReservation(null)}
         onRecordPayment={(payment) => recordPayment(selectedReservation, payment)}
+        onExtendStay={(checkOut) => { setExtensionError(''); return extendStay(selectedReservation, checkOut) }}
         pendingPayment={selectedReservation.id ? pendingPayments[selectedReservation.id] : undefined}
         canRecordPayment={canRecordPayments}
+        extensionSummary={extensionSummary ?? undefined}
+        extensionSaving={extensionSaving}
+        extensionError={extensionError}
       />}
       {reservationToCancel && <CancelReservationDialog reservation={reservationToCancel} onClose={() => setReservationToCancel(null)} onConfirm={cancelReservation} saving={cancelling} />}
     </section>

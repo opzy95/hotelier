@@ -5,6 +5,7 @@ export const receptionistPermissionOptions = [
   { value: 'guests.create', label: 'Create guest records' },
   { value: 'reservations.check_in', label: 'Check guests in' },
   { value: 'reservations.check_out', label: 'Check guests out' },
+  { value: 'reservations.extend', label: 'Extend in-house stays' },
   { value: 'rooms.availability.view', label: 'View room availability' },
   { value: 'payments.walk_in.create', label: 'Record payments on reservations and walk-ins' },
 ] as const
@@ -12,4 +13,6 @@ export const receptionistPermissionOptions = [
 export type ReceptionistPermission = typeof receptionistPermissionOptions[number]['value']
 
 export const defaultReceptionistPermissions: ReceptionistPermission[] =
-  receptionistPermissionOptions.map(({ value }) => value)
+  receptionistPermissionOptions
+    .filter(({ value }) => value !== 'reservations.extend')
+    .map(({ value }) => value)

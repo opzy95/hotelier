@@ -26,6 +26,8 @@ import { fetchHotelGuestProfiles, updateHotelGuestProfile } from './adminGuestsA
 import type { HotelGuestProfile } from './adminGuestsApi'
 import { useAdminReservations } from './AdminReservationsContext'
 import { useHotelSession } from './HotelSessionContext'
+import { extendReservationStay } from './adminReservationsApi'
+import { AdminStayExtensionDialog } from './AdminStayExtensionDialog'
 import {
   formatReservationDate,
   reservationBalanceDue,
@@ -103,20 +105,8 @@ function guestStatusClass(status: string) {
   return 'border-stone-200 bg-stone-100 text-stone-600'
 }
 
-function reservationNights(reservation: Reservation) {
-  const checkIn = new Date(`${reservation.checkIn}T12:00:00`).getTime()
-  const checkOut = new Date(`${reservation.checkOut}T12:00:00`).getTime()
-  return Math.max(1, Math.ceil((checkOut - checkIn) / 86400000))
-}
-
 function roomDisplayName(roomId: string | undefined, inventory: Room[]) {
   return inventory.find((room) => room.id === roomId)?.name ?? (roomId ? `Room ${roomId}` : 'Room not assigned')
-}
-
-function addNightsToDate(date: string, nights: number) {
-  const result = new Date(`${date}T12:00:00`)
-  result.setDate(result.getDate() + nights)
-  return result.toISOString().slice(0, 10)
 }
 
 function exportGuests(guests: Guest[]) {
@@ -176,92 +166,6 @@ function GuestDialog({ guest, onClose, onSave, saving, error }: {
           <footer className="flex justify-end gap-2 border-t border-stone-200 bg-white p-4">
             <button type="button" onClick={onClose} className="border border-stone-300 px-4 py-2.5 text-[12px] font-semibold text-ink hover:bg-stone-50">Cancel</button>
             <button type="submit" disabled={saving} className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[12px] font-semibold text-white hover:bg-forest-deep disabled:opacity-60"><Check aria-hidden="true" className="size-3.5" />{saving ? 'Saving…' : 'Save Guest'}</button>
-          </footer>
-        </form>
-      </section>
-    </div>
-  )
-}
-
-function ExtendStayDialog({ reservation, onClose, onSave }: {
-  reservation: Reservation
-  onClose: () => void
-  onSave: (updatedReservation: Reservation) => void
-}) {
-  const [extraNights, setExtraNights] = useState('1')
-  const nightsToAdd = Math.max(1, Number(extraNights) || 1)
-  const nightlyRate = reservation.nightlyRate ?? Math.ceil(reservation.amount / reservationNights(reservation))
-  const extensionCost = nightlyRate * nightsToAdd
-  const paidAmount = reservationPaidAmount(reservation)
-  const newTotal = reservation.amount + extensionCost
-  const newBalance = newTotal - paidAmount
-  const newCheckOut = addNightsToDate(reservation.checkOut, nightsToAdd)
-  const fieldClass = 'mt-1.5 w-full border border-stone-200 bg-white px-3 py-2.5 text-[13px] text-ink outline-none focus:border-amber-800 focus:ring-2 focus:ring-amber-800/10'
-
-  function submitExtension(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    onSave({
-      ...reservation,
-      checkOut: newCheckOut,
-      amount: newTotal,
-      paidAmount,
-      nightlyRate,
-      payment: 'Partially Paid',
-    })
-  }
-
-  return (
-    <div className="fixed inset-0 z-[70] flex justify-end bg-black/50" onMouseDown={onClose}>
-      <section role="dialog" aria-modal="true" aria-labelledby="extend-stay-title" className="flex h-full w-full max-w-[440px] flex-col bg-paper shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="flex items-start justify-between border-b border-stone-200 bg-white px-5 py-4">
-          <div>
-            <p className="text-[11px] font-semibold tracking-[0.15em] text-amber-800">IN-HOUSE RESERVATION</p>
-            <h2 id="extend-stay-title" className="mt-1 font-display text-xl text-ink">Edit / Extend Stay</h2>
-            <p className="mt-1 text-[12px] text-muted">{reservation.guest} · {reservation.room}</p>
-          </div>
-          <button type="button" onClick={onClose} aria-label="Close stay editor" className="grid size-8 place-items-center text-muted hover:bg-stone-100"><X aria-hidden="true" className="size-4" /></button>
-        </header>
-        <form onSubmit={submitExtension} className="flex min-h-0 flex-1 flex-col">
-          <div className="flex-1 space-y-4 overflow-y-auto p-5">
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block text-[12px] font-semibold tracking-wide text-ink">CURRENT CHECK-OUT
-                <input className={fieldClass} type="date" value={reservation.checkOut} readOnly />
-              </label>
-              <label className="block text-[12px] font-semibold tracking-wide text-ink">ADD NIGHTS
-                <input className={fieldClass} type="number" min="1" max="30" value={extraNights} onChange={(event) => setExtraNights(event.target.value)} required />
-              </label>
-            </div>
-            <div className="border border-amber-200 bg-amber-50/70 p-3">
-              <p className="text-[11px] font-semibold tracking-wide text-amber-950">UPDATED STAY</p>
-              <div className="mt-2 flex items-center justify-between gap-3 text-[12px]">
-                <span className="text-muted">New check-out date</span>
-                <strong className="font-semibold text-ink">{formatReservationDate(newCheckOut)} {newCheckOut.slice(0, 4)}</strong>
-              </div>
-              <div className="mt-1.5 flex items-center justify-between gap-3 text-[12px]">
-                <span className="text-muted">Additional nights</span>
-                <strong className="font-semibold text-ink">{nightsToAdd}</strong>
-              </div>
-            </div>
-            <section className="space-y-2 border border-stone-200 bg-white p-3">
-              <h3 className="text-[11px] font-semibold tracking-wide text-ink">FOLIO BALANCE</h3>
-              <div className="flex items-center justify-between gap-3 text-[12px]">
-                <span className="text-muted">Amount already paid</span>
-                <strong className="font-semibold text-emerald-800">{reservationCurrency.format(paidAmount)}</strong>
-              </div>
-              <div className="flex items-center justify-between gap-3 text-[12px]">
-                <span className="text-muted">Added nights ({reservationCurrency.format(nightlyRate)} × {nightsToAdd})</span>
-                <strong className="font-semibold text-ink">{reservationCurrency.format(extensionCost)}</strong>
-              </div>
-              <div className="flex items-center justify-between gap-3 border-t border-amber-200 bg-amber-50 px-2.5 py-2 text-[13px]">
-                <span className="font-bold text-ink">Remaining balance due</span>
-                <strong className="text-base font-bold text-amber-950">{reservationCurrency.format(newBalance)}</strong>
-              </div>
-              <p className="text-[10px] text-muted">The extension adds to the existing folio; the original paid amount is kept unchanged.</p>
-            </section>
-          </div>
-          <footer className="flex justify-end gap-2 border-t border-stone-200 bg-white p-4">
-            <button type="button" onClick={onClose} className="border border-stone-300 px-4 py-2.5 text-[12px] font-semibold text-ink hover:bg-stone-50">Cancel</button>
-            <button type="submit" className="inline-flex items-center gap-2 bg-forest px-4 py-2.5 text-[12px] font-semibold text-white hover:bg-forest-deep"><Check aria-hidden="true" className="size-3.5" /> Save Stay Extension</button>
           </footer>
         </form>
       </section>
@@ -373,8 +277,8 @@ function GuestInspector({ guest, reservations, inventory, onEdit, onClose, onExt
       </div>
       <footer className="grid grid-cols-2 gap-1.5 border-t border-stone-100 bg-paper p-2.5">
         {canManage && <button type="button" onClick={onEdit} className="inline-flex items-center justify-center gap-1.5 bg-amber-900 px-2 py-2.5 text-[9px] font-semibold text-white hover:bg-amber-950"><Pencil aria-hidden="true" className="size-3" /> Edit Guest Profile</button>}
-        {canManage && activeReservation ? (
-          <button type="button" onClick={onExtendStay} className="inline-flex items-center justify-center gap-1.5 border border-stone-300 bg-white px-2 py-2.5 text-[9px] font-semibold text-ink hover:bg-stone-50"><CalendarDays aria-hidden="true" className="size-3" /> Edit / Extend Stay</button>
+        {activeReservation ? (
+          <button type="button" onClick={onExtendStay} className="inline-flex items-center justify-center gap-1.5 border border-stone-300 bg-white px-2 py-2.5 text-[9px] font-semibold text-ink hover:bg-stone-50"><CalendarDays aria-hidden="true" className="size-3" /> Extend Stay</button>
         ) : nextReservation ? (
           <Link to="/dashboard/reservations" className="inline-flex items-center justify-center gap-1.5 border border-stone-300 bg-white px-2 py-2.5 text-[9px] font-semibold text-ink hover:bg-stone-50"><CalendarDays aria-hidden="true" className="size-3" /> View Reservation</Link>
         ) : canManage ? (
@@ -395,6 +299,8 @@ export function AdminGuests() {
   const [guestsError, setGuestsError] = useState('')
   const [guestSaving, setGuestSaving] = useState(false)
   const [guestSaveError, setGuestSaveError] = useState('')
+  const [extensionSaving, setExtensionSaving] = useState(false)
+  const [extensionError, setExtensionError] = useState('')
   const [currentMonth] = useState(() => new Date().toISOString().slice(0, 7))
   const [selectedId, setSelectedId] = useState('')
   const [query, setQuery] = useState('')
@@ -483,11 +389,25 @@ export function AdminGuests() {
     }
   }
 
-  function saveStayExtension(updatedReservation: Reservation) {
-    setReservations((current) => current.map((reservation) => (
-      reservation.reference === updatedReservation.reference ? updatedReservation : reservation
-    )))
-    setDialog(null)
+  async function saveStayExtension(checkOut: string) {
+    if (!hotelId || !selectedInHouseReservation?.id) {
+      setExtensionError('Could not extend the stay because the hotel or reservation ID is missing.')
+      return
+    }
+
+    setExtensionSaving(true)
+    setExtensionError('')
+    try {
+      const updatedReservation = await extendReservationStay(hotelId, selectedInHouseReservation.id, checkOut)
+      setReservations((current) => current.map((reservation) => (
+        reservation.id === updatedReservation.id ? updatedReservation : reservation
+      )))
+      setDialog(null)
+    } catch (error: unknown) {
+      setExtensionError(error instanceof Error ? error.message : 'Could not extend this stay.')
+    } finally {
+      setExtensionSaving(false)
+    }
   }
 
   function clearFilters() {
@@ -620,7 +540,7 @@ export function AdminGuests() {
             </div>
           </footer>
         </section>
-        {selectedGuest && <GuestInspector guest={selectedGuest} reservations={reservations} inventory={rooms} onEdit={() => { setGuestSaveError(''); setDialog('edit') }} onExtendStay={() => setDialog('extend')} onClose={() => setSelectedId('')} canManage={canManage} />}
+        {selectedGuest && <GuestInspector guest={selectedGuest} reservations={reservations} inventory={rooms} onEdit={() => { setGuestSaveError(''); setDialog('edit') }} onExtendStay={() => { setExtensionError(''); setDialog('extend') }} onClose={() => setSelectedId('')} canManage={canManage} />}
       </div>
 
       <footer className="mt-5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-t border-stone-200 py-3 text-[9px] text-muted">
@@ -639,8 +559,8 @@ export function AdminGuests() {
           error={guestSaveError}
         />
       )}
-      {canManage && dialog === 'extend' && selectedInHouseReservation && (
-        <ExtendStayDialog reservation={selectedInHouseReservation} onClose={() => setDialog(null)} onSave={saveStayExtension} />
+      {dialog === 'extend' && selectedInHouseReservation && (
+        <AdminStayExtensionDialog reservation={selectedInHouseReservation} onClose={() => setDialog(null)} onSave={(checkOut) => { void saveStayExtension(checkOut) }} saving={extensionSaving} error={extensionError} />
       )}
     </section>
   )

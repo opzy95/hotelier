@@ -155,7 +155,10 @@ function ReceptionistInviteForm({ staff, initialStaffMemberId, onClose, onSave, 
         return current.filter((value) => value !== 'reservations.check_in')
       }
       if (permission === 'reservations.view' && current.includes(permission)) {
-        return current.filter((value) => !['reservations.view', 'reservations.check_in', 'reservations.check_out', 'reservations.create', 'payments.walk_in.create'].includes(value))
+        return current.filter((value) => !['reservations.view', 'reservations.check_in', 'reservations.check_out', 'reservations.create', 'reservations.extend', 'payments.walk_in.create'].includes(value))
+      }
+      if (permission === 'guests.view' && current.includes(permission)) {
+        return current.filter((value) => !['guests.view', 'reservations.extend'].includes(value))
       }
       if (permission === 'rooms.availability.view' && current.includes(permission)) {
         return current.filter((value) => value !== 'rooms.availability.view' && value !== 'reservations.create')
@@ -176,6 +179,14 @@ function ReceptionistInviteForm({ staff, initialStaffMemberId, onClose, onSave, 
       if (permission === 'reservations.check_in' || permission === 'reservations.check_out') {
         const next = new Set<ReceptionistPermission>(current)
         next.add('reservations.view')
+        next.add(permission)
+        return [...next]
+      }
+      if (permission === 'reservations.extend') {
+        const next = new Set<ReceptionistPermission>(current)
+        next.add('reservations.view')
+        next.add('guests.view')
+        next.add('rooms.availability.view')
         next.add(permission)
         return [...next]
       }

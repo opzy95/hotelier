@@ -325,6 +325,17 @@ export function checkOutReservation(hotelId: string, reservationId: string) {
   return updateFrontDeskReservation(hotelId, reservationId, 'check-out')
 }
 
+export async function extendReservationStay(hotelId: string, reservationId: string, checkOut: string) {
+  const payload: unknown = await apiRequest(`${hotelPath(hotelId)}/${encodeURIComponent(reservationId)}/extend`, {
+    method: 'POST',
+    body: JSON.stringify({ checkOut }),
+  })
+  if (!isRecord(payload) || !('reservation' in payload)) {
+    throw new Error('The hotel API returned an invalid extended reservation.')
+  }
+  return normalizeReservation(payload.reservation)
+}
+
 export async function recordReservationPayment(
   hotelId: string,
   reservationId: string,
