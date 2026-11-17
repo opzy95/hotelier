@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { ArrowDownUp, CalendarDays, Check, ChevronDown, Clock3, SlidersHorizontal, Users } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { roomSuites } from '../data/roomSuites'
+import { publicHotelsPath } from '../routes/publicBooking'
 
 const filters = ['All Accommodations', 'Deluxe Rooms', 'Executive Suites', 'Presidential Sanctuary']
 
@@ -121,8 +122,8 @@ function RoomListingCard({ room }: { room: (typeof roomSuites)[number] }) {
             <button type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(!detailsOpen)} className="inline-flex min-h-9 items-center gap-1.5 border border-[#d9d8d2] px-3 text-[8px] font-medium tracking-wide text-ink transition-colors hover:border-forest">
               {detailsOpen ? 'HIDE DETAILS' : 'ROOM DETAILS'} <ChevronDown aria-hidden="true" className={`h-3 w-3 transition-transform ${detailsOpen ? 'rotate-180' : ''}`} />
             </button>
-            <Link to={`/book?room=${room.id}`} className="inline-flex min-h-9 items-center gap-1.5 bg-forest px-3 text-[8px] font-medium tracking-wide text-white transition-colors hover:bg-forest-deep">
-              SELECT SANCTUARY <ArrowDownUp aria-hidden="true" className="h-3 w-3 rotate-90" />
+            <Link to={publicHotelsPath()} className="inline-flex min-h-9 items-center gap-1.5 bg-forest px-3 text-[8px] font-medium tracking-wide text-white transition-colors hover:bg-forest-deep">
+              CHOOSE HOTEL <ArrowDownUp aria-hidden="true" className="h-3 w-3 rotate-90" />
             </Link>
           </div>
         </div>

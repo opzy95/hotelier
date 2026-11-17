@@ -179,6 +179,143 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   return payload as T
 }
 
+export async function publicApiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers)
+  headers.delete('Authorization')
+  const response = await sendRequest(path, { ...init, headers }, null)
+  const { payload, responseText, unreadable } = await readResponse(response)
+
+  if (!response.ok) {
+    const code = getErrorCode(payload)
+    throw new ApiError(getErrorMessage(response.status, code, payload, responseText), response.status, code)
+  }
+  if (unreadable) throw new Error('The hotel API returned an unreadable response.')
+
+  return payload as T
+}
+
+export type PublicHotel = {
+  name: string
+  slug: string
+  phone: string
+  address: {
+    line1: string
+    line2: string
+    city: string
+    region: string
+    postalCode: string
+    country: string
+  }
+  type: string
+  settings: {
+    timezone: string
+    locale: string | null
+    currency: string
+    checkInTime: string
+    checkOutTime: string
+  }
+}
+
+export type PublicHotelsResponse = {
+  hotels: Array<Pick<PublicHotel, 'name' | 'slug'>>
+}
+
+export type PublicRoomPricing = {
+  nights: number
+  rateMinorPerNight: number
+  subtotalMinor: number
+  feesMinor: number
+  fees: Array<{ name?: string; amountMinor?: number }>
+  totalMinor: number
+  currency: string
+}
+
+export type PublicRoomType = {
+  id: string
+  name: string
+  description: string
+  sizeSqm: number
+  maxGuests: number
+  bedSetup: Array<{ type: string; count: number }>
+  amenities: string[]
+  photos: Array<{ secureUrl: string }>
+  availableRoomCount: number
+  pricing: PublicRoomPricing
+}
+
+export type PublicAvailabilityResponse = {
+  hotel: PublicHotel
+  stay: {
+    checkIn: string
+    checkOut: string
+    nights: number
+  }
+  guests: {
+    adults: number
+    children: number
+  }
+  roomTypes: PublicRoomType[]
+}
+
+export type PublicReservation = {
+  reference: string
+  status: string
+  paymentStatus: string
+  pricing: PublicRoomPricing
+  room?: string | {
+    roomNumber?: string
+    number?: string
+    code?: string
+    name?: string
+  }
+  assignedRoom?: string | {
+    roomNumber?: string
+    number?: string
+    code?: string
+    name?: string
+  }
+  roomNumber?: string
+}
+
+export type PublicReservationLookup = {
+  reference: string
+  status?: string
+  paymentStatus?: string
+  pricing?: PublicRoomPricing
+  checkIn?: string
+  checkOut?: string
+  adults?: number
+  children?: number
+  guestName?: string
+  guestEmail?: string
+  guestPhone?: string
+  hotel?: { name?: string; slug?: string }
+  roomType?: { name?: string }
+  room?: PublicReservation['room']
+  assignedRoom?: PublicReservation['assignedRoom']
+  roomNumber?: string
+}
+
+export type PublicReservationLookupResponse =
+  | { reservation: PublicReservationLookup }
+  | PublicReservationLookup
+
+export type CreatePublicReservationRequest = {
+  hotelSlug: string
+  roomTypeId: string
+  checkIn: string
+  checkOut: string
+  adults: number
+  children: number
+  guestName: string
+  guestEmail: string
+  guestPhone: string
+}
+
+export type CreatePublicReservationResponse = {
+  reservation: PublicReservation
+}
+
 export type PlatformUser = {
   id: string
   name: string

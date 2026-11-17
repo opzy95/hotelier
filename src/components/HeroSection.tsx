@@ -2,6 +2,7 @@ import type { FormEvent } from 'react'
 import { ArrowRight, Baby, CalendarDays, Search, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import heroImage from '../img/Opzy Luxury Hotel infinity lagoon pool at twilight in Victoria Island.png'
+import { publicHotelsPath } from '../routes/publicBooking'
 
 function dateValue(date: Date) {
   const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -19,7 +20,7 @@ function BookingBar() {
     const formData = new FormData(event.currentTarget)
     const params = new URLSearchParams()
     for (const [key, value] of formData.entries()) params.set(key, String(value))
-    navigate(`/book?${params.toString()}`)
+    navigate(publicHotelsPath(params))
   }
 
   return (

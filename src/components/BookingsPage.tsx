@@ -1,14 +1,137 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { ArrowRight, KeyRound, LockKeyhole, Mail, PhoneCall, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Download, KeyRound, LockKeyhole, Mail, PhoneCall, ShieldCheck } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { ApiError, publicApiRequest } from '../api'
+import type { PublicReservationLookup, PublicReservationLookupResponse } from '../api'
 import heroImage from '../img/Opzy Luxury Hotel infinity lagoon pool at twilight in Victoria Island.png'
+import { downloadReservationConfirmationPdf } from '../reservationConfirmationPdf'
+
+function formatReservationAmount(amountMinor: number, currency: string) {
+  const formatter = new Intl.NumberFormat(undefined, { style: 'currency', currency })
+  const fractionDigits = formatter.resolvedOptions().maximumFractionDigits ?? 2
+  return formatter.format(amountMinor / (10 ** fractionDigits))
+}
 
 function BookingLookup() {
-  const [lookupAttempted, setLookupAttempted] = useState(false)
-  function handleLookup(event: FormEvent<HTMLFormElement>) {
+  const [recoveryToast, setRecoveryToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [reservation, setReservation] = useState<PublicReservationLookup | null>(null)
+  const [lookupEmail, setLookupEmail] = useState('')
+  const [lookupError, setLookupError] = useState('')
+  const [isLookingUp, setIsLookingUp] = useState(false)
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false)
+  const [pdfError, setPdfError] = useState('')
+  const [showReferenceRecovery, setShowReferenceRecovery] = useState(false)
+  const [recoveryMessage, setRecoveryMessage] = useState('')
+  const [recoveryError, setRecoveryError] = useState('')
+  const [isRecoveringReference, setIsRecoveringReference] = useState(false)
+
+  useEffect(() => {
+    if (!recoveryToast) return
+
+    const timeoutId = window.setTimeout(() => setRecoveryToast(null), 3000)
+    return () => window.clearTimeout(timeoutId)
+  }, [recoveryToast])
+
+  function getLookupError(error: unknown) {
+    if (error instanceof ApiError && error.status === 404 && error.code === 'reservation_not_found') {
+      return 'No reservation matched that reference and email. Check both details and try again.'
+    }
+    if (error instanceof ApiError && error.status === 400) {
+      return 'Enter a valid reservation reference and email address.'
+    }
+    return error instanceof Error ? error.message : 'The reservation could not be retrieved. Please try again.'
+  }
+
+  async function handleLookup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setLookupAttempted(true)
+    const formData = new FormData(event.currentTarget)
+    const reference = String(formData.get('reference') ?? '').trim()
+    const email = String(formData.get('email') ?? '').trim()
+    setReservation(null)
+    setLookupEmail(email)
+    setLookupError('')
+    setPdfError('')
+    setIsLookingUp(true)
+    try {
+      const result = await publicApiRequest<PublicReservationLookupResponse>('/public/reservations/lookup', {
+        method: 'POST',
+        body: JSON.stringify({ reference, email }),
+      })
+      setReservation('reservation' in result ? result.reservation : result)
+    } catch (error) {
+      setLookupError(getLookupError(error))
+    } finally {
+      setIsLookingUp(false)
+    }
+  }
+
+  async function handleReferenceRecovery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const formData = new FormData(event.currentTarget)
+    const email = String(formData.get('recoveryEmail') ?? '').trim()
+    setRecoveryError('')
+    setRecoveryMessage('')
+    setRecoveryToast(null)
+    setIsRecoveringReference(true)
+    try {
+      await publicApiRequest<unknown>('/public/reservations/reference-email', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      })
+      const message = 'If an upcoming confirmed reservation matches this email, its reference and check-in date will be emailed to you.'
+      setRecoveryMessage(message)
+      setRecoveryToast({ type: 'success', message: 'If there is a matching upcoming reservation, its reference will be emailed to you.' })
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 400) {
+        const message = 'Enter a valid email address.'
+        setRecoveryError(message)
+        setRecoveryToast({ type: 'error', message })
+      } else if (error instanceof ApiError && error.status === 503) {
+        const message = 'We could not send the reference email right now. Please try again later.'
+        setRecoveryError(message)
+        setRecoveryToast({ type: 'error', message })
+      } else {
+        const message = error instanceof Error ? error.message : 'Reference recovery could not be completed. Please try again.'
+        setRecoveryError(message)
+        setRecoveryToast({ type: 'error', message })
+      }
+    } finally {
+      setIsRecoveringReference(false)
+    }
+  }
+
+  async function handleDownloadConfirmation() {
+    if (!reservation) return
+
+    setPdfError('')
+    setIsGeneratingPdf(true)
+    try {
+      const assignedRoom = reservation.assignedRoom ?? reservation.room
+      const assignedRoomLabel = typeof assignedRoom === 'string'
+        ? assignedRoom
+        : assignedRoom?.roomNumber ?? assignedRoom?.number ?? assignedRoom?.code ?? assignedRoom?.name
+      await downloadReservationConfirmationPdf({
+        hotelName: reservation.hotel?.name ?? reservation.hotel?.slug ?? 'Hotel reservation',
+        reference: reservation.reference,
+        status: reservation.status,
+        guestName: reservation.guestName,
+        guestEmail: reservation.guestEmail ?? lookupEmail,
+        guestPhone: reservation.guestPhone,
+        roomTypeName: reservation.roomType?.name,
+        assignedRoom: assignedRoomLabel,
+        checkIn: reservation.checkIn,
+        checkOut: reservation.checkOut,
+        adults: reservation.adults,
+        children: reservation.children,
+        pricing: reservation.pricing,
+        paymentStatus: reservation.paymentStatus,
+      })
+    } catch (error) {
+      setPdfError(error instanceof Error ? `Could not generate the PDF: ${error.message}` : 'Could not generate the reservation confirmation PDF.')
+    } finally {
+      setIsGeneratingPdf(false)
+    }
   }
 
   return (
@@ -21,23 +144,88 @@ function BookingLookup() {
 
       <form onSubmit={handleLookup} className="mt-6 space-y-4">
         <label className="block">
+          <span className="mb-1.5 block text-[8px] font-medium tracking-wide text-ink">RESERVATION REFERENCE</span>
+          <span className="flex h-10 items-center gap-2 border border-[#deddd7] bg-[#faf9f6] px-3 focus-within:border-[#94713a]">
+            <KeyRound aria-hidden="true" className="h-3 w-3 shrink-0 text-muted" />
+            <input required name="reference" autoComplete="off" placeholder="HTL-0123456789ABCDEF" className="h-full w-full bg-transparent text-[10px] text-ink outline-none placeholder:text-[#b4b5af]" />
+          </span>
+        </label>
+        <label className="block">
           <span className="mb-1.5 block text-[8px] font-medium tracking-wide text-ink">RESERVATION EMAIL ADDRESS</span>
           <span className="flex h-10 items-center gap-2 border border-[#deddd7] bg-[#faf9f6] px-3 focus-within:border-[#94713a]">
             <Mail aria-hidden="true" className="h-3 w-3 shrink-0 text-muted" />
             <input required name="email" type="email" autoComplete="email" placeholder="you@example.com" className="h-full w-full bg-transparent text-[10px] text-ink outline-none placeholder:text-[#b4b5af]" />
           </span>
         </label>
-        <button type="submit" className="flex h-10 w-full items-center justify-center gap-2 bg-forest text-[8px] font-medium tracking-wide text-white transition-colors hover:bg-forest-deep">
-          FIND MY BOOKING <ArrowRight aria-hidden="true" className="h-3 w-3" />
+        <button type="submit" disabled={isLookingUp} className="flex h-10 w-full items-center justify-center gap-2 bg-forest text-[8px] font-medium tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-60">
+          {isLookingUp ? 'SEARCHING…' : 'FIND MY BOOKING'} {!isLookingUp && <ArrowRight aria-hidden="true" className="h-3 w-3" />}
         </button>
       </form>
 
-      {lookupAttempted && (
-        <p role="status" className="mt-4 border border-[#e7e1d5] bg-[#f7f5f0] px-3 py-2.5 text-center text-[10px] leading-[1.6] text-muted">
-          Online reservation lookup is not connected yet. Contact our reservations desk and we’ll be happy to help locate your stay.
-        </p>
+      {lookupError && <p role="alert" className="mt-4 border border-red-200 bg-red-50 px-3 py-2.5 text-center text-[10px] leading-[1.6] text-red-800">{lookupError}</p>}
+
+      {recoveryToast && (
+        <div className="pointer-events-none fixed inset-x-4 bottom-4 z-[100] flex justify-center sm:inset-x-auto sm:right-5 sm:justify-end">
+          <div
+            role={recoveryToast.type === 'error' ? 'alert' : 'status'}
+            className={`pointer-events-auto max-w-sm border px-4 py-3 text-xs leading-5 shadow-lg ${
+              recoveryToast.type === 'error'
+                ? 'border-red-200 bg-red-50 text-red-800'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+            }`}
+          >
+            {recoveryToast.message}
+          </div>
+        </div>
       )}
 
+      {reservation && (
+        <section aria-label="Reservation details" className="mt-5 border border-[#e7e1d5] bg-[#f7f5f0] p-4 text-left">
+          <h3 className="font-display text-lg text-ink">Reservation found</h3>
+          <dl className="mt-3 grid gap-2 text-[10px] sm:grid-cols-2">
+            <div><dt className="text-muted">Reference</dt><dd className="font-medium text-ink">{reservation.reference}</dd></div>
+            {reservation.status && <div><dt className="text-muted">Status</dt><dd className="font-medium capitalize text-ink">{reservation.status}</dd></div>}
+            {reservation.hotel?.name && <div><dt className="text-muted">Hotel</dt><dd className="font-medium text-ink">{reservation.hotel.name}</dd></div>}
+            {reservation.roomType?.name && <div><dt className="text-muted">Room type</dt><dd className="font-medium text-ink">{reservation.roomType.name}</dd></div>}
+            {reservation.checkIn && <div><dt className="text-muted">Check-in</dt><dd className="font-medium text-ink">{reservation.checkIn}</dd></div>}
+            {reservation.checkOut && <div><dt className="text-muted">Check-out</dt><dd className="font-medium text-ink">{reservation.checkOut}</dd></div>}
+            {reservation.paymentStatus && <div><dt className="text-muted">Payment status</dt><dd className="font-medium capitalize text-ink">{reservation.paymentStatus}</dd></div>}
+            {reservation.pricing && <div><dt className="text-muted">Final total</dt><dd className="font-medium text-ink">{formatReservationAmount(reservation.pricing.totalMinor, reservation.pricing.currency)}</dd></div>}
+          </dl>
+          {pdfError && <p role="alert" className="mt-4 border border-red-200 bg-red-50 px-3 py-2.5 text-center text-[10px] leading-[1.6] text-red-800">{pdfError}</p>}
+          <button type="button" disabled={isGeneratingPdf} onClick={handleDownloadConfirmation} className="mt-4 inline-flex min-h-10 items-center justify-center gap-2 bg-forest px-4 text-[9px] font-semibold tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-60">
+            <Download aria-hidden="true" className="h-3.5 w-3.5" />{isGeneratingPdf ? 'PREPARING PDF…' : 'DOWNLOAD CONFIRMATION (PDF)'}
+          </button>
+          <p className="mt-2 text-[9px] text-muted">This confirmation is not proof of payment.</p>
+        </section>
+      )}
+
+      <div className="mt-5 border-t border-[#eeece6] pt-4">
+        <button type="button" aria-expanded={showReferenceRecovery} onClick={() => {
+          setShowReferenceRecovery((shown) => !shown)
+          setRecoveryError('')
+          setRecoveryMessage('')
+        }} className="text-[10px] font-medium text-[#84652e] underline underline-offset-2">
+          Forgot your reservation reference?
+        </button>
+        {showReferenceRecovery && (
+          <form onSubmit={handleReferenceRecovery} className="mt-4 space-y-3">
+            <p className="text-[9px] leading-[1.6] text-muted">Enter your email and we’ll send references for any upcoming confirmed reservations.</p>
+            <label className="block">
+              <span className="mb-1.5 block text-[8px] font-medium tracking-wide text-ink">EMAIL ADDRESS</span>
+              <span className="flex h-10 items-center gap-2 border border-[#deddd7] bg-[#faf9f6] px-3 focus-within:border-[#94713a]">
+                <Mail aria-hidden="true" className="h-3 w-3 shrink-0 text-muted" />
+                <input required name="recoveryEmail" type="email" autoComplete="email" placeholder="you@example.com" className="h-full w-full bg-transparent text-[10px] text-ink outline-none placeholder:text-[#b4b5af]" />
+              </span>
+            </label>
+            <button type="submit" disabled={isRecoveringReference} className="flex h-10 w-full items-center justify-center gap-2 border border-forest text-[8px] font-medium tracking-wide text-forest transition-colors hover:bg-forest hover:text-white disabled:cursor-wait disabled:opacity-60">
+              {isRecoveringReference ? 'SENDING…' : 'EMAIL MY REFERENCES'}
+            </button>
+            {recoveryMessage && <p role="status" className="border border-[#e7e1d5] bg-[#f7f5f0] px-3 py-2.5 text-center text-[10px] leading-[1.6] text-muted">{recoveryMessage}</p>}
+            {recoveryError && <p role="alert" className="border border-red-200 bg-red-50 px-3 py-2.5 text-center text-[10px] leading-[1.6] text-red-800">{recoveryError}</p>}
+          </form>
+        )}
+      </div>
     </section>
   )
 }

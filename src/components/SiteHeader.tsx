@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { CalendarDays, Globe2, Menu, Sparkles, X } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
+import { publicHotelsPath } from '../routes/publicBooking'
 
 const links = [
   { label: 'Home', href: '/' },
@@ -42,10 +43,10 @@ export function SiteHeader() {
           <button type="button" aria-label="Language: English" className="text-white/80 transition-colors hover:text-champagne">
             <Globe2 aria-hidden="true" className="h-4 w-4" />
           </button>
-          <Link to="/book" aria-label="Book your stay" className="text-white/80 transition-colors hover:text-champagne">
+          <Link to={publicHotelsPath()} aria-label="Book your stay" className="text-white/80 transition-colors hover:text-champagne">
             <CalendarDays aria-hidden="true" className="h-4 w-4" />
           </Link>
-          <Link to="/book" className="bg-champagne px-5 py-2.5 text-[10px] font-semibold text-forest-deep transition-colors hover:bg-white">
+          <Link to={publicHotelsPath()} className="bg-champagne px-5 py-2.5 text-[10px] font-semibold text-forest-deep transition-colors hover:bg-white">
             BOOK YOUR STAY
           </Link>
         </div>
@@ -76,7 +77,7 @@ export function SiteHeader() {
           <Link to="/hotel/login" onClick={() => setMenuOpen(false)} className="block border-b border-white/10 py-3 text-sm font-medium text-champagne hover:text-white">
             Hotel Portal
           </Link>
-          <Link to="/book" onClick={() => setMenuOpen(false)} className="mt-4 flex items-center justify-center gap-2 bg-champagne px-4 py-3 text-xs font-semibold text-forest-deep">
+          <Link to={publicHotelsPath()} onClick={() => setMenuOpen(false)} className="mt-4 flex items-center justify-center gap-2 bg-champagne px-4 py-3 text-xs font-semibold text-forest-deep">
             <CalendarDays aria-hidden="true" className="h-4 w-4" />
             BOOK YOUR STAY
           </Link>

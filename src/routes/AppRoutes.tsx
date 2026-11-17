@@ -1,9 +1,9 @@
 import { useEffect } from 'react'
 import type { ReactNode } from 'react'
-import { Link, Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom'
+import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { AboutPage } from '../components/AboutPage'
 import { BookingsPage } from '../components/BookingsPage'
-import { BookYourStayPage } from '../components/BookYourStayPage'
+import { BookYourStayRoute } from '../components/BookYourStayPage'
 import { ContactPage } from '../components/ContactPage'
 import { ExperiencesPage } from '../components/ExperiencesPage'
 import { HeroSection } from '../components/HeroSection'
@@ -30,6 +30,8 @@ import { useHotelSession } from '../admin/HotelSessionContext'
 import { SuperAdminDashboard } from '../admin/SuperAdminDashboard'
 import { EmailVerificationPage, HotelDashboardGate, HotelOnboardingPage } from '../components/HotelOnboardingPages'
 import { HotelAdminLoginPage, HotelAdminRegistrationPage, HotelForgotPasswordPage, HotelResetPasswordPage, StaffInvitationAcceptancePage, SuperAdminLoginPage } from '../components/PortalAuthPages'
+import { PublicHotelDetailsRoute, PublicHotelsPage } from '../components/PublicHotelsPage'
+import { publicHotelsPath } from './publicBooking'
 
 function DashboardLandingRedirect() {
   const { managerRole, permissions } = useHotelSession()
@@ -93,6 +95,11 @@ function PublicLayout() {
   )
 }
 
+function LegacyBookingRedirect() {
+  const location = useLocation()
+  return <Navigate to={`${publicHotelsPath()}${location.search}${location.hash}`} replace />
+}
+
 function ExpiredSessionRedirect() {
   const navigate = useNavigate()
 
@@ -121,7 +128,10 @@ export function AppRoutes() {
         <Route path="/rooms" element={<RoomsPage />} />
         <Route path="/experiences" element={<ExperiencesPage />} />
         <Route path="/bookings" element={<BookingsPage />} />
-        <Route path="/book" element={<BookYourStayPage />} />
+        <Route path="/hotels" element={<PublicHotelsPage />} />
+        <Route path="/hotels/:hotelSlug" element={<PublicHotelDetailsRoute />} />
+        <Route path="/book" element={<LegacyBookingRedirect />} />
+        <Route path="/:hotelSlug/book" element={<BookYourStayRoute />} />
         <Route path="/contact" element={<ContactPage />} />
       </Route>
       <Route path="/dashboard" element={<HotelDashboardGate><AdminLayout /></HotelDashboardGate>}>
