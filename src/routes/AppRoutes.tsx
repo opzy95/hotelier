@@ -29,7 +29,7 @@ import { AdminStaff } from '../admin/AdminStaff'
 import { HotelSettingsPage } from '../admin/HotelSettings'
 import { useHotelSession } from '../admin/HotelSessionContext'
 import { SuperAdminDashboard } from '../admin/SuperAdminDashboard'
-import { EmailVerificationPage, HotelDashboardGate, HotelOnboardingPage } from '../components/HotelOnboardingPages'
+import { EmailVerificationPage, HotelDashboardGate, HotelOnboardingPage, HotelSubscriptionPaymentCallbackPage } from '../components/HotelOnboardingPages'
 import { HotelAdminLoginPage, HotelAdminRegistrationPage, HotelForgotPasswordPage, HotelResetPasswordPage, StaffInvitationAcceptancePage, SuperAdminLoginPage } from '../components/PortalAuthPages'
 import { PublicHotelDetailsRoute, PublicHotelsPage } from '../components/PublicHotelsPage'
 import { publicHotelsPath } from './publicBooking'
@@ -155,6 +155,7 @@ export function AppRoutes() {
       <Route path="/hotel/forgot-password" element={<HotelForgotPasswordPage />} />
       <Route path="/reset-password" element={<HotelResetPasswordPage />} />
       <Route path="/hotel/onboarding" element={<HotelOnboardingPage />} />
+      <Route path="/hotel/subscription/callback" element={<HotelSubscriptionPaymentCallbackPage />} />
       <Route path="/verify-email" element={<EmailVerificationPage />} />
       <Route path="/platform/login" element={<SuperAdminLoginPage />} />
       <Route path="/super-admin" element={<SuperAdminDashboard />} />

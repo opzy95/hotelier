@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { ArrowRight, Check, Hotel, LoaderCircle, ShieldCheck } from 'lucide-react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { ApiError, apiRequest } from '../api'
 import type { HotelOnboardingResponse, HotelSettings, PlatformProfileResponse } from '../api'
 import { HotelSessionProvider } from '../admin/HotelSessionContext'
@@ -171,12 +171,86 @@ export function EmailVerificationPage() {
   )
 }
 
+export function HotelSubscriptionPaymentCallbackPage() {
+  const [searchParams] = useSearchParams()
+  const reference = searchParams.get('reference')?.trim() ?? ''
+  const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
+  const [status, setStatus] = useState<'verifying' | 'success' | 'failed'>(() => reference && hotelId ? 'verifying' : 'failed')
+  const [message, setMessage] = useState(() => !reference
+    ? 'The Paystack return URL did not include a payment reference.'
+    : !hotelId
+      ? 'Your hotel session is missing. Sign in as a hotel manager and verify the payment again.'
+      : '')
+
+  useEffect(() => {
+    if (!reference || !hotelId) return
+
+    let cancelled = false
+    void apiRequest<{
+      payment?: { status?: string }
+      subscription?: { status?: string }
+    }>(`/hotels/${encodeURIComponent(hotelId)}/subscription/payments/verify`, {
+      method: 'POST',
+      body: JSON.stringify({ reference }),
+    })
+      .then((result) => {
+        if (cancelled) return
+        if (result.payment?.status === 'successful' && result.subscription?.status === 'active') {
+          sessionStorage.removeItem('subscriptionPaymentReference')
+          setStatus('success')
+          return
+        }
+        setStatus('failed')
+        setMessage('Payment could not be verified as successful. The subscription has not been activated.')
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setStatus('failed')
+          setMessage(error instanceof Error ? error.message : 'Could not verify the subscription payment.')
+        }
+      })
+
+    return () => { cancelled = true }
+  }, [hotelId, reference])
+
+  return (
+    <OnboardingFrame
+      eyebrow="SUBSCRIPTION PAYMENT"
+      title={status === 'success' ? 'Payment verified' : status === 'failed' ? 'Payment not verified' : 'Verifying payment'}
+      description={status === 'success'
+        ? 'Paystack confirmed your payment and the hotel subscription is active.'
+        : status === 'failed'
+          ? 'A Paystack redirect alone does not confirm payment. The backend must verify the transaction before the subscription is activated.'
+          : 'Checking the payment status securely with the hotel platform.'}
+    >
+      {status === 'verifying' ? (
+        <LoadingPanel />
+      ) : status === 'success' ? (
+        <>
+          <Notice tone="success">Subscription active. Payment reference: {reference}</Notice>
+          <Link to="/hotel/onboarding" className="mt-4 inline-flex min-h-10 items-center gap-2 bg-forest px-4 text-xs font-semibold text-white hover:bg-forest-deep">Continue hotel setup <ArrowRight aria-hidden="true" className="size-4" /></Link>
+        </>
+      ) : (
+        <>
+          <Notice>{message}</Notice>
+          {reference && <p className="mt-3 text-xs text-muted">Payment reference: {reference}</p>}
+          <Link to="/hotel/onboarding" className="mt-4 inline-block text-xs font-semibold text-forest underline-offset-2 hover:underline">Return to hotel setup</Link>
+        </>
+      )}
+    </OnboardingFrame>
+  )
+}
+
 function formatPlanPrice(price: OnboardingPlan['prices'][number]) {
+  const fractionDigits = new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: price.currency,
+  }).resolvedOptions().maximumFractionDigits ?? 2
   const formattedPrice = new Intl.NumberFormat(undefined, {
     style: 'currency',
     currency: price.currency,
     maximumFractionDigits: 2,
-  }).format(price.amount)
+  }).format(price.amount / (10 ** fractionDigits))
   const months = Number(price.billingInterval.match(/^\d+/)?.[0])
   const interval = Number.isFinite(months)
     ? `${months} ${months === 1 ? 'month' : 'months'}`
@@ -361,6 +435,8 @@ export function HotelOnboardingPage() {
   const [error, setError] = useState('')
   const [paymentNotice, setPaymentNotice] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const [paymentReference, setPaymentReference] = useState(() => sessionStorage.getItem('subscriptionPaymentReference') ?? '')
+  const [pendingCheckout, setPendingCheckout] = useState(false)
 
   useEffect(() => {
     if (!hotelId) return
@@ -372,9 +448,9 @@ export function HotelOnboardingPage() {
       try {
         const profile = await apiRequest<PlatformProfileResponse>('/auth/me')
         const membership = profile.memberships.find((item) => (
-          item.hotelId === hotelId && ['manager', 'receptionist'].includes(item.role.toLowerCase())
+          item.hotelId === hotelId && item.role.toLowerCase() === 'manager'
         ))
-        if (!membership) throw new Error('You do not have access to this hotel.')
+        if (!membership) throw new Error('A signed-in hotel manager is required to manage subscriptions.')
 
         const current = await apiRequest<HotelOnboardingResponse>(`/hotels/${encodeURIComponent(hotelId)}/onboarding`)
         if (cancelled) return
@@ -402,16 +478,64 @@ export function HotelOnboardingPage() {
     return () => { cancelled = true }
   }, [hotelId, navigate, reloadKey])
 
-  async function selectPlan(planId: string, billingInterval?: string) {
+  async function startCheckout() {
     setSaving(true)
     setError('')
     try {
-      const result = await apiRequest<{ paymentRequired: boolean }>(`/hotels/${encodeURIComponent(hotelId)}/subscription`, {
-        method: 'PUT',
-        body: JSON.stringify({ planId, ...(billingInterval ? { billingInterval } : {}) }),
+      const result = await apiRequest<unknown>(`/hotels/${encodeURIComponent(hotelId)}/subscription/payments/initialize`, {
+        method: 'POST',
       })
-      setPaymentNotice(result.paymentRequired)
-      setReloadKey((key) => key + 1)
+      if (typeof result !== 'object' || result === null || !('checkout' in result)
+        || typeof result.checkout !== 'object' || result.checkout === null
+        || !('authorizationUrl' in result.checkout) || typeof result.checkout.authorizationUrl !== 'string'
+        || !('reference' in result.checkout) || typeof result.checkout.reference !== 'string'
+      ) {
+        throw new Error('The hotel API returned an invalid Paystack checkout response.')
+      }
+
+      const authorizationUrl = new URL(result.checkout.authorizationUrl)
+      if (authorizationUrl.protocol !== 'https:') {
+        throw new Error('The hotel API returned an insecure Paystack checkout URL.')
+      }
+
+      sessionStorage.setItem('subscriptionPaymentReference', result.checkout.reference)
+      setPaymentReference(result.checkout.reference)
+      window.location.assign(authorizationUrl.toString())
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not start Paystack checkout.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function selectPlan(option: OnboardingPlanOption) {
+    setSaving(true)
+    setError('')
+    try {
+      const result = await apiRequest<{
+        paymentRequired?: boolean
+        subscription?: { status?: string }
+      }>(`/hotels/${encodeURIComponent(hotelId)}/subscription`, {
+        method: 'PUT',
+        body: JSON.stringify(option.price
+          ? {
+            planCode: option.code.toUpperCase(),
+            billingInterval: Number(option.price.billingInterval.match(/^\d+/)?.[0]) === 12
+              ? '12_months'
+              : option.price.billingInterval,
+          }
+          : { planId: option.id }),
+      })
+      if (option.price) {
+        if (result.subscription?.status !== 'pending') {
+          throw new Error('The selected plan did not return a pending subscription. Checkout was not started.')
+        }
+        setPendingCheckout(true)
+        await startCheckout()
+      } else {
+        setPaymentNotice(Boolean(result.paymentRequired))
+        setReloadKey((key) => key + 1)
+      }
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not save your plan selection.')
     } finally {
@@ -478,6 +602,13 @@ export function HotelOnboardingPage() {
           {plans.length === 0 ? error ? (
             <button type="button" onClick={() => { setReloadKey((key) => key + 1) }} className="mt-4 text-xs font-semibold text-forest underline-offset-2 hover:underline">Try again</button>
           ) : <Notice>No active plans are available yet. Please contact the platform administrator.</Notice> : (
+            <>
+            {(pendingCheckout || onboarding.subscription?.status === 'pending') && (
+              <div className="mt-4 border border-amber-200 bg-amber-50 p-4">
+                <p className="text-xs leading-5 text-amber-950">Your subscription is pending payment. {paymentReference ? `Payment reference: ${paymentReference}. ` : ''}Continue checkout to complete activation.</p>
+                <button type="button" disabled={saving} onClick={() => { void startCheckout() }} className="mt-3 inline-flex min-h-10 items-center gap-2 bg-forest px-4 text-xs font-semibold text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">{saving ? 'OPENING CHECKOUT…' : 'CONTINUE TO PAYSTACK'} {!saving && <ArrowRight aria-hidden="true" className="size-4" />}</button>
+              </div>
+            )}
             <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {planOptions.map((option, index) => (
                 <article key={option.key} className={`flex min-w-0 flex-col rounded-sm border bg-white p-5 shadow-sm ${index === 0 ? 'border-amber-700/50 ring-1 ring-amber-700/10' : 'border-stone-200'}`}>
@@ -505,19 +636,20 @@ export function HotelOnboardingPage() {
                   <ul className="my-3 flex-1 space-y-2 text-[11px] leading-4 text-muted">
                     {option.features.map((feature) => <li key={feature} className="flex gap-2"><Check aria-hidden="true" className="size-3.5 shrink-0 text-forest" /><span className="capitalize">{feature}</span></li>)}
                   </ul>
-                  <button type="button" disabled={saving} onClick={() => { void selectPlan(option.id, option.price?.billingInterval) }} className="mt-4 flex min-h-11 items-center justify-center gap-2 bg-forest px-3 text-[10px] font-semibold tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">
+                  <button type="button" disabled={saving || pendingCheckout || onboarding.subscription?.status === 'pending'} onClick={() => { void selectPlan(option) }} className="mt-4 flex min-h-11 items-center justify-center gap-2 bg-forest px-3 text-[10px] font-semibold tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">
                     {saving ? 'SAVING…' : 'CHOOSE THIS PLAN'} {!saving && <ArrowRight aria-hidden="true" className="size-3.5" />}
                   </button>
                 </article>
               ))}
             </div>
+            </>
           )}
         </section>
       ) : onboarding?.currentStep === 'configure_hotel' ? (
         <section>
           <h2 className="font-display text-xl">Set your hotel preferences</h2>
           <p className="mt-1 text-xs text-muted">These settings control the hotel’s local time, language, currency, and check-in schedule.</p>
-          {paymentNotice && <Notice tone="success">Plan selected. Payment for this plan is still pending; online payment is not available yet. You can finish setting up your hotel.</Notice>}
+          {paymentNotice && <Notice tone="success">Plan selected. You can continue setting up your hotel.</Notice>}
           {onboarding.hotelStatus === 'pending_approval' && <p className="mt-3 flex items-start gap-2 border-l-2 border-amber-500 bg-amber-50 px-3 py-2.5 text-[10px] leading-5 text-amber-950"><ShieldCheck aria-hidden="true" className="mt-0.5 size-4 shrink-0" />After setup, your hotel will still need platform administrator approval before activation.</p>}
           <HotelSettingsStep onComplete={(settings) => { void saveHotelSettings(settings) }} isSaving={saving} error={error} />
         </section>
