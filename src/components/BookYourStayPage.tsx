@@ -10,7 +10,7 @@ import type {
   PublicReservation,
   PublicRoomType,
 } from '../api'
-import { ArrowLeft, ArrowRight, BedDouble, CalendarDays, CheckCircle2, Clock3, Download, MapPin, Search, Users } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BedDouble, CalendarDays, CheckCircle2, Clock3, Copy, Download, MapPin, Search, Users } from 'lucide-react'
 import { downloadReservationConfirmationPdf } from '../reservationConfirmationPdf'
 
 type GuestDetails = {
@@ -19,7 +19,7 @@ type GuestDetails = {
   phone: string
 }
 
-type BookingStep = 'availability' | 'guest' | 'review' | 'confirmation'
+type BookingStep = 'availability' | 'guest' | 'review' | 'payment' | 'confirmation'
 
 function localDateValue(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
@@ -85,12 +85,13 @@ function BookingProgress({ step }: { step: BookingStep }) {
     { key: 'availability', label: 'Availability' },
     { key: 'guest', label: 'Guest details' },
     { key: 'review', label: 'Review' },
+    { key: 'payment', label: 'Payment' },
     { key: 'confirmation', label: 'Confirmation' },
   ]
   const currentIndex = steps.findIndex(({ key }) => key === step)
 
   return (
-    <ol aria-label="Booking progress" className="mb-7 grid grid-cols-4 border-b border-[#e9e6df] pb-4 text-center text-[8px]">
+    <ol aria-label="Booking progress" className="mb-7 grid grid-cols-5 border-b border-[#e9e6df] pb-4 text-center text-[8px]">
       {steps.map(({ key, label }, index) => (
         <li key={key} aria-current={key === step ? 'step' : undefined} className={index <= currentIndex ? 'font-semibold text-ink' : 'text-[#a5a49d]'}>
           <span className={`mx-auto mb-1.5 grid h-6 w-6 place-items-center border ${index <= currentIndex ? 'border-forest bg-forest text-white' : 'border-[#e3e1da] bg-[#f0efeb] text-[#9b9a93]'}`}>
@@ -190,6 +191,9 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
   const [selectedRoomTypeId, setSelectedRoomTypeId] = useState('')
   const [step, setStep] = useState<BookingStep>('availability')
   const [guestDetails, setGuestDetails] = useState<GuestDetails | null>(null)
+  const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'paystack' | ''>('')
+  const [receiptFile, setReceiptFile] = useState<File | null>(null)
+  const [copyNotice, setCopyNotice] = useState('')
   const [bookingError, setBookingError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [reservation, setReservation] = useState<PublicReservation | null>(null)
@@ -198,6 +202,15 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
   const roomTypes = availability?.roomTypes ?? []
   const selectedRoomType = availability?.roomTypes.find(({ id }) => id === selectedRoomTypeId)
   const nights = availability?.stay.nights ?? 0
+  const bankDetails = hotel?.bankDetails
+  const hasBankDetails = Boolean(
+    typeof bankDetails?.bankName === 'string'
+    && bankDetails.bankName.trim()
+    && typeof bankDetails.accountName === 'string'
+    && bankDetails.accountName.trim()
+    && typeof bankDetails.bankAccountNumber === 'string'
+    && bankDetails.bankAccountNumber.trim(),
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -215,6 +228,8 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
     setAvailabilityError('')
     setBookingError('')
     setSelectedRoomTypeId('')
+    setReceiptFile(null)
+    setPaymentMethod('')
     setAvailability(null)
     setStep('availability')
 
@@ -256,6 +271,8 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
   function selectRoomType(roomTypeId: string) {
     setSelectedRoomTypeId(roomTypeId)
     setGuestDetails(null)
+    setReceiptFile(null)
+    setPaymentMethod('')
     setBookingError('')
     setStep('availability')
     const nextParams = new URLSearchParams(searchParams)
@@ -272,11 +289,35 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
       phone: String(formData.get('guestPhone') ?? '').trim(),
     })
     setBookingError('')
+    setPaymentMethod('')
+    setReceiptFile(null)
     setStep('review')
+  }
+
+  async function copyBankDetails() {
+    if (!bankDetails) return
+    try {
+      await navigator.clipboard.writeText([
+        `Bank: ${bankDetails.bankName}`,
+        `Account name: ${bankDetails.accountName}`,
+        `Account number: ${bankDetails.bankAccountNumber}`,
+      ].join('\n'))
+      setCopyNotice('Bank details copied.')
+    } catch {
+      setCopyNotice('Could not copy automatically. Please select and copy the bank details.')
+    }
   }
 
   async function createReservation() {
     if (!selectedRoomType || !guestDetails) return
+    if (paymentMethod !== 'bank_transfer' || !hasBankDetails) {
+      setBookingError('Select direct bank transfer and make sure this hotel has bank details configured.')
+      return
+    }
+    if (!receiptFile) {
+      setBookingError('Upload your transfer receipt before confirming the reservation.')
+      return
+    }
 
     setIsSubmitting(true)
     setBookingError('')
@@ -292,9 +333,12 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
         guestEmail: guestDetails.email,
         guestPhone: guestDetails.phone,
       }
+      const requestBody = new FormData()
+      Object.entries(request).forEach(([key, value]) => requestBody.append(key, String(value)))
+      requestBody.append('receipt', receiptFile)
       const result = await publicApiRequest<CreatePublicReservationResponse>('/public/reservations', {
         method: 'POST',
-        body: JSON.stringify(request),
+        body: requestBody,
       })
       setReservation(result.reservation)
       setStep('confirmation')
@@ -304,6 +348,8 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
       if (error instanceof ApiError && error.status === 409 && error.code === 'room_unavailable') {
         setAvailability(null)
         setSelectedRoomTypeId('')
+        setReceiptFile(null)
+        setPaymentMethod('')
         setStep('availability')
       }
     } finally {
@@ -397,7 +443,7 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
           <div className="mx-auto max-w-[980px]">
             <BookingProgress step={step} />
             <h1 className="font-display text-3xl text-ink">Review your reservation</h1>
-            <p className="mt-2 text-sm text-muted">Review your details before confirming your stay. No online payment is taken.</p>
+            <p className="mt-2 text-sm text-muted">Review your details, then choose a payment method and upload your transfer receipt.</p>
             <div className="mt-6 grid items-start gap-5 lg:grid-cols-[1.3fr_0.8fr]">
               <div className="border border-[#e9e6df] bg-white p-5">
                 <h2 className="font-display text-xl text-ink">{selectedRoomType.name}</h2>
@@ -412,11 +458,89 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
                 {bookingError && <p role="alert" className="mt-4 border border-red-200 bg-red-50 p-3 text-sm text-red-800">{bookingError}</p>}
                 <div className="mt-6 flex flex-wrap justify-between gap-3">
                   <button type="button" onClick={() => setStep('guest')} className="inline-flex min-h-10 items-center gap-2 border border-[#a9a79f] px-4 text-xs text-ink hover:bg-[#f3f1eb]"><ArrowLeft aria-hidden="true" className="h-4 w-4" />Edit details</button>
-                  <button type="button" disabled={isSubmitting} onClick={createReservation} className="inline-flex min-h-10 items-center gap-2 bg-forest px-5 text-xs font-medium text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-60">
-                    {isSubmitting ? 'Confirming…' : 'Confirm reservation'} {!isSubmitting && <ArrowRight aria-hidden="true" className="h-4 w-4" />}
+                  <button type="button" onClick={() => { setBookingError(''); setStep('payment') }} className="inline-flex min-h-10 items-center gap-2 bg-forest px-5 text-xs font-medium text-white hover:bg-forest-deep">
+                    Continue to payment <ArrowRight aria-hidden="true" className="h-4 w-4" />
                   </button>
                 </div>
               </div>
+              <BookingQuote room={selectedRoomType} checkIn={checkIn} checkOut={checkOut} adults={adults} childrenCount={children} hotel={hotel} />
+            </div>
+          </div>
+        </section>
+      ) : step === 'payment' && selectedRoomType && guestDetails ? (
+        <section className="min-h-[65vh] bg-paper px-5 py-7 sm:px-8 lg:px-10">
+          <div className="mx-auto max-w-[980px]">
+            <BookingProgress step={step} />
+            <h1 className="font-display text-3xl text-ink">Payment</h1>
+            <p className="mt-2 text-sm text-muted">Choose how you’ll pay for your stay. Your reservation will remain pending payment verification until the hotel checks your receipt.</p>
+            <div className="mt-6 grid items-start gap-5 lg:grid-cols-[1.3fr_0.8fr]">
+              <form onSubmit={(event) => { event.preventDefault(); void createReservation() }} className="space-y-4 border border-[#e9e6df] bg-white p-5">
+                <fieldset>
+                  <legend className="text-xs font-semibold text-ink">Choose a payment method</legend>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className={`flex cursor-pointer items-start gap-3 border p-4 ${paymentMethod === 'bank_transfer' ? 'border-forest bg-forest/5 ring-1 ring-forest' : 'border-[#e9e6df]'}`}>
+                      <input type="radio" name="paymentMethod" value="bank_transfer" checked={paymentMethod === 'bank_transfer'} onChange={() => { setPaymentMethod('bank_transfer'); setBookingError('') }} className="mt-0.5 accent-[#183f2c]" />
+                      <span>
+                        <strong className="block text-xs text-ink">Direct bank transfer</strong>
+                        <span className="mt-1 block text-[10px] leading-4 text-muted">Transfer to the hotel account and upload your receipt.</span>
+                      </span>
+                    </label>
+                    <label aria-disabled="true" className="flex cursor-not-allowed items-start gap-3 border border-stone-200 bg-stone-50 p-4 opacity-60">
+                      <input type="radio" name="paymentMethod" value="paystack" disabled className="mt-0.5" />
+                      <span>
+                        <strong className="block text-xs text-ink">Paystack</strong>
+                        <span className="mt-1 block text-[10px] leading-4 text-muted">Not available at the moment.</span>
+                      </span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                {paymentMethod === 'bank_transfer' && (
+                  <section aria-labelledby="transfer-details-title" className="border border-[#e9e6df] bg-paper p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h2 id="transfer-details-title" className="font-display text-lg text-ink">Hotel bank details</h2>
+                        <p className="mt-1 text-[10px] text-muted">Transfer the booking total to this account.</p>
+                      </div>
+                      {hasBankDetails && <button type="button" onClick={() => { void copyBankDetails() }} className="inline-flex min-h-8 items-center gap-1.5 border border-forest px-2.5 text-[10px] font-semibold text-forest hover:bg-forest hover:text-white"><Copy aria-hidden="true" className="size-3" />Copy details</button>}
+                    </div>
+                    {hasBankDetails && bankDetails ? (
+                      <dl className="mt-4 grid gap-3 text-xs sm:grid-cols-2">
+                        <div><dt className="text-[10px] text-muted">Bank</dt><dd className="mt-1 font-medium text-ink">{bankDetails.bankName}</dd></div>
+                        <div><dt className="text-[10px] text-muted">Account name</dt><dd className="mt-1 font-medium text-ink">{bankDetails.accountName}</dd></div>
+                        <div className="sm:col-span-2"><dt className="text-[10px] text-muted">Account number</dt><dd className="mt-1 font-medium tracking-wide text-ink">{bankDetails.bankAccountNumber}</dd></div>
+                      </dl>
+                    ) : (
+                      <p role="alert" className="mt-3 text-xs leading-5 text-rose-800">Bank details are not available for this hotel yet. Please contact the hotel before continuing.</p>
+                    )}
+                    {copyNotice && <p role="status" className="mt-3 text-[10px] text-muted">{copyNotice}</p>}
+                    <p className="mt-4 border-t border-[#e9e6df] pt-3 text-[10px] leading-5 text-muted">Booking total: <strong className="text-ink">{formatMinorAmount(selectedRoomType.pricing.totalMinor, selectedRoomType.pricing.currency)}</strong></p>
+                  </section>
+                )}
+
+                {paymentMethod === 'bank_transfer' && hasBankDetails && (
+                  <label className="block text-xs font-medium text-ink">Upload transfer receipt
+                    <input
+                      type="file"
+                      name="receipt"
+                      accept="image/*,application/pdf"
+                      required
+                      onChange={(event) => { setReceiptFile(event.target.files?.[0] ?? null); setBookingError('') }}
+                      className="mt-2 block w-full border border-[#dedbd3] bg-[#faf9f6] p-3 text-xs file:mr-3 file:border-0 file:bg-forest file:px-3 file:py-2 file:text-[10px] file:font-semibold file:text-white"
+                    />
+                    <span className="mt-1 block text-[10px] text-muted">Accepted formats: image or PDF. Payment remains unverified until the hotel reviews the receipt.</span>
+                    {receiptFile && <span className="mt-1 block text-[10px] text-forest">Selected: {receiptFile.name}</span>}
+                  </label>
+                )}
+
+                {bookingError && <p role="alert" className="border border-red-200 bg-red-50 p-3 text-sm text-red-800">{bookingError}</p>}
+                <div className="flex flex-wrap justify-between gap-3 pt-2">
+                  <button type="button" disabled={isSubmitting} onClick={() => setStep('review')} className="inline-flex min-h-10 items-center gap-2 border border-[#a9a79f] px-4 text-xs text-ink hover:bg-[#f3f1eb] disabled:opacity-60"><ArrowLeft aria-hidden="true" className="h-4 w-4" />Back to review</button>
+                  <button type="submit" disabled={isSubmitting || !hasBankDetails || paymentMethod !== 'bank_transfer' || !receiptFile} className="inline-flex min-h-10 items-center gap-2 bg-forest px-5 text-xs font-medium text-white hover:bg-forest-deep disabled:cursor-not-allowed disabled:opacity-60">
+                    {isSubmitting ? 'Submitting…' : 'Upload receipt and confirm'} {!isSubmitting && <ArrowRight aria-hidden="true" className="h-4 w-4" />}
+                  </button>
+                </div>
+              </form>
               <BookingQuote room={selectedRoomType} checkIn={checkIn} checkOut={checkOut} adults={adults} childrenCount={children} hotel={hotel} />
             </div>
           </div>
@@ -429,7 +553,9 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
               <CheckCircle2 aria-hidden="true" className="mx-auto h-12 w-12 text-forest" />
               <p className="mt-4 text-xs font-semibold tracking-[0.12em] text-[#84652e]">RESERVATION {reservation.status.toUpperCase()}</p>
               <h1 className="mt-2 font-display text-3xl text-ink">Thank you, {guestDetails.name}</h1>
-              <p className="mt-2 text-sm text-muted">Your reservation at {hotel.name} has been confirmed.</p>
+              <p className="mt-2 text-sm text-muted">{reservation.paymentStatus === 'pending_verification'
+                ? `Your reservation at ${hotel.name} has been received. Your transfer receipt is waiting for hotel verification.`
+                : `Your reservation at ${hotel.name} has been confirmed.`}</p>
               <dl className="mx-auto mt-7 grid max-w-xl gap-4 border-y border-[#eeece6] py-5 text-left sm:grid-cols-2">
                 <div><dt className="text-xs text-muted">Reference</dt><dd className="mt-1 font-medium text-ink">{reservation.reference}</dd></div>
                 <div><dt className="text-xs text-muted">Assigned room</dt><dd className="mt-1 font-medium text-ink">{assignedRoomName(reservation) || 'Assigned by hotel'}</dd></div>
@@ -437,7 +563,20 @@ function BookYourStayPage({ hotelSlug }: { hotelSlug: string }) {
                 <div><dt className="text-xs text-muted">Payment status</dt><dd className="mt-1 font-medium capitalize text-ink">{reservation.paymentStatus}</dd></div>
                 <div className="sm:col-span-2"><dt className="text-xs text-muted">Final total</dt><dd className="mt-1 font-display text-2xl text-ink">{formatMinorAmount(reservation.pricing.totalMinor, reservation.pricing.currency)}</dd></div>
               </dl>
-              <p className="mt-5 text-sm text-muted">Your booking is confirmed. Payment is {reservation.paymentStatus}; no online payment was taken.</p>
+              <p className="mt-5 text-sm text-muted">{reservation.paymentStatus === 'pending_verification'
+                ? 'Your payment is not marked as paid yet. The hotel will verify your transfer receipt.'
+                : `Payment status: ${reservation.paymentStatus}.`}</p>
+              {hotel.bankDetails && (
+                <section aria-labelledby="bank-details-title" className="mx-auto mt-5 max-w-xl border border-[#e9e6df] bg-paper p-4 text-left">
+                  <h2 id="bank-details-title" className="font-display text-lg text-ink">Bank details for payment</h2>
+                  <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                    <div><dt className="text-xs text-muted">Bank</dt><dd className="mt-0.5 font-medium text-ink">{hotel.bankDetails.bankName}</dd></div>
+                    <div><dt className="text-xs text-muted">Account name</dt><dd className="mt-0.5 font-medium text-ink">{hotel.bankDetails.accountName}</dd></div>
+                    <div className="sm:col-span-2"><dt className="text-xs text-muted">Account number</dt><dd className="mt-0.5 font-medium text-ink">{hotel.bankDetails.bankAccountNumber}</dd></div>
+                  </dl>
+                  <p className="mt-3 text-xs leading-5 text-muted">Please use your reservation reference as the transfer description and contact the hotel to confirm payment.</p>
+                </section>
+              )}
               {pdfError && <p role="alert" className="mt-5 border border-red-200 bg-red-50 p-3 text-sm text-red-800">{pdfError}</p>}
               <button type="button" disabled={isGeneratingPdf} onClick={downloadReservationConfirmation} className="mt-6 inline-flex min-h-11 items-center justify-center gap-2 bg-forest px-5 text-xs font-semibold tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-60">
                 <Download aria-hidden="true" className="h-4 w-4" />{isGeneratingPdf ? 'PREPARING PDF…' : 'DOWNLOAD RESERVATION CONFIRMATION'}

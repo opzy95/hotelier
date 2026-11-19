@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react'
 import { ArrowRight, Check, Hotel, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { ApiError, apiRequest } from '../api'
-import type { HotelOnboardingResponse, PlatformProfileResponse } from '../api'
+import type { HotelOnboardingResponse, HotelSettings, PlatformProfileResponse } from '../api'
 import { HotelSessionProvider } from '../admin/HotelSessionContext'
 import type { HotelSessionIdentity } from '../admin/HotelSessionContext'
 
@@ -287,7 +287,7 @@ function LoadingPanel() {
 }
 
 function HotelSettingsStep({ onComplete, isSaving, error }: {
-  onComplete: (settings: Record<string, string>) => void
+  onComplete: (settings: HotelSettings) => void
   isSaving: boolean
   error: string
 }) {
@@ -301,6 +301,11 @@ function HotelSettingsStep({ onComplete, isSaving, error }: {
       currency: setting('currency').toUpperCase(),
       checkInTime: setting('check-in-time'),
       checkOutTime: setting('check-out-time'),
+      bankDetails: {
+        bankName: setting('bank-name'),
+        bankAccountNumber: setting('bank-account-number'),
+        accountName: setting('bank-account-name'),
+      },
     })
   }
 
@@ -323,6 +328,20 @@ function HotelSettingsStep({ onComplete, isSaving, error }: {
         <label className="text-[10px] font-semibold tracking-wide">CHECK-OUT TIME
           <input className={inputClass} type="time" name="check-out-time" defaultValue="11:00" required />
         </label>
+      </div>
+      <div className="border-t border-stone-200 pt-4">
+        <h3 className="text-[10px] font-semibold tracking-wide text-amber-800">BANK DETAILS FOR GUEST PAYMENTS</h3>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <label className="text-[10px] font-semibold tracking-wide">BANK NAME
+            <input className={inputClass} name="bank-name" minLength={2} maxLength={100} required />
+          </label>
+          <label className="text-[10px] font-semibold tracking-wide">ACCOUNT NUMBER
+            <input className={inputClass} name="bank-account-number" inputMode="numeric" autoComplete="off" minLength={4} maxLength={34} required />
+          </label>
+          <label className="text-[10px] font-semibold tracking-wide sm:col-span-2">ACCOUNT NAME
+            <input className={inputClass} name="bank-account-name" minLength={2} maxLength={120} required />
+          </label>
+        </div>
       </div>
       {error && <Notice>{error}</Notice>}
       <button type="submit" disabled={isSaving} className="inline-flex min-h-11 items-center gap-2 bg-forest px-5 text-xs font-semibold tracking-wide text-white transition-colors hover:bg-forest-deep disabled:cursor-wait disabled:opacity-70">
@@ -400,14 +419,26 @@ export function HotelOnboardingPage() {
     }
   }
 
-  async function saveHotelSettings(settings: Record<string, string>) {
+  async function saveHotelSettings(settings: HotelSettings) {
     setSaving(true)
     setError('')
     try {
-      await apiRequest(`/hotels/${encodeURIComponent(hotelId)}/settings`, {
-        method: 'PATCH',
-        body: JSON.stringify(settings),
-      })
+      await Promise.all([
+        apiRequest(`/hotels/${encodeURIComponent(hotelId)}/settings`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            timezone: settings.timezone,
+            locale: settings.locale,
+            currency: settings.currency,
+            checkInTime: settings.checkInTime,
+            checkOutTime: settings.checkOutTime,
+          }),
+        }),
+        apiRequest(`/hotels/${encodeURIComponent(hotelId)}/bank-details`, {
+          method: 'PUT',
+          body: JSON.stringify(settings.bankDetails),
+        }),
+      ])
       setReloadKey((key) => key + 1)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not save hotel settings.')

@@ -198,6 +198,7 @@ export type PublicHotel = {
   name: string
   slug: string
   phone: string
+  bankDetails?: HotelBankDetails | null
   address: {
     line1: string
     line2: string
@@ -214,6 +215,25 @@ export type PublicHotel = {
     checkInTime: string
     checkOutTime: string
   }
+}
+
+export type HotelBankDetails = {
+  bankName: string
+  bankAccountNumber: string
+  accountName: string
+}
+
+export type HotelSettings = {
+  timezone: string
+  locale: string
+  currency: string
+  checkInTime: string
+  checkOutTime: string
+  bankDetails: HotelBankDetails
+}
+
+export type HotelSettingsResponse = {
+  settings: Partial<HotelSettings>
 }
 
 export type PublicHotelsResponse = {

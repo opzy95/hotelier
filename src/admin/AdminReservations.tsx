@@ -10,6 +10,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
+  Eye,
   Plus,
   Search,
   SlidersHorizontal,
@@ -24,7 +25,7 @@ import type { PaymentMethod, ReservationAvailability, ReservationDraft, Reservat
 import type { Room, RoomType } from './adminRoomsData'
 
 const folioOptions: FolioStatus[] = ['Confirmed', 'Checked In', 'Pending Payment', 'Cancelled', 'Checked Out', 'No Show']
-const paymentOptions: PaymentStatus[] = ['Paid', 'Partially Paid', 'Pending', 'Refunded']
+const paymentOptions: PaymentStatus[] = ['Paid', 'Partially Paid', 'Pending', 'Pending Verification', 'Refunded']
 const paymentMethods: { value: PaymentMethod; label: string }[] = [
   { value: 'cash', label: 'Cash' },
   { value: 'card', label: 'Card' },
@@ -42,6 +43,14 @@ function formatAmount(amount: number, currency = 'NGN') {
     currency,
     maximumFractionDigits: 0,
   }).format(amount)
+}
+
+function isSecureReceiptUrl(value: string) {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 function reservationStatusFilter(value: string) {
@@ -109,6 +118,7 @@ function statusStyle(status: FolioStatus | PaymentStatus) {
     Paid: 'border-emerald-200 bg-emerald-50 text-emerald-800',
     'Partially Paid': 'border-amber-200 bg-amber-50 text-amber-900',
     Pending: 'border-amber-200 bg-amber-50 text-amber-800',
+    'Pending Verification': 'border-sky-200 bg-sky-50 text-sky-800',
     Refunded: 'border-stone-200 bg-stone-100 text-stone-600',
   }
   return styles[status]
@@ -472,6 +482,7 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
   const [paymentIdempotencyKey, setPaymentIdempotencyKey] = useState(pendingPayment?.idempotencyKey ?? createPaymentIdempotencyKey)
   const [paymentError, setPaymentError] = useState('')
   const [savingPayment, setSavingPayment] = useState(false)
+  const [confirmingPaid, setConfirmingPaid] = useState(false)
   const [showExtensionForm, setShowExtensionForm] = useState(false)
   const [extraStayNights, setExtraStayNights] = useState('1')
   const [paymentHistoryReload, setPaymentHistoryReload] = useState(0)
@@ -538,6 +549,31 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
     }
   }
 
+  async function markBalancePaid() {
+    if (!canRecordPayment || !reservation.id || !hotelId || balance <= 0 || savingPayment) {
+      setPaymentError('This reservation cannot be marked as paid. Check your payment permission and reservation balance.')
+      return
+    }
+
+    setSavingPayment(true)
+    setPaymentError('')
+    try {
+      await onRecordPayment({
+        amountMinor: Math.round(balance * minorUnitScale),
+        method: 'bank_transfer',
+        idempotencyKey: paymentIdempotencyKey,
+      })
+      setPaymentAmount('')
+      setPaymentIdempotencyKey(createPaymentIdempotencyKey())
+      setPaymentHistoryReload((current) => current + 1)
+      setConfirmingPaid(false)
+    } catch (error) {
+      setPaymentError(error instanceof Error ? error.message : 'Could not mark this reservation as paid.')
+    } finally {
+      setSavingPayment(false)
+    }
+  }
+
   async function submitExtension(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!validAdditionalNights) return
@@ -595,6 +631,17 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
             <button type="submit" disabled={extensionSaving || !validAdditionalNights} className="bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-not-allowed disabled:opacity-50">{extensionSaving ? 'Extending…' : 'Confirm Extension'}</button>
           </div>
         </form>}
+        {reservation.receiptUrl && isSecureReceiptUrl(reservation.receiptUrl) && (
+          <section className="mt-4 flex flex-wrap items-center justify-between gap-3 border border-sky-200 bg-sky-50/60 p-3">
+            <div>
+              <h3 className="text-[10px] font-semibold tracking-wide text-sky-950">TRANSFER RECEIPT</h3>
+              <p className="mt-1 text-[9px] text-muted">Review the uploaded proof before recording the bank transfer as paid.</p>
+            </div>
+            <a href={reservation.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 border border-sky-800 px-3 py-2 text-[10px] font-semibold text-sky-900 hover:bg-sky-800 hover:text-white">
+              <Eye aria-hidden="true" className="size-3.5" /> View receipt
+            </a>
+          </section>
+        )}
         {extensionSummary && extensionSummary.reservationId === reservation.id && <section className="mt-4 border border-emerald-200 bg-emerald-50/60 p-3">
           <h3 className="text-[10px] font-semibold tracking-wide text-emerald-950">EXTENSION PAYMENT SUMMARY</h3>
           <dl className="mt-2 space-y-1.5 text-[10px]">
@@ -642,7 +689,17 @@ function ReservationDetails({ reservation, inventory, hotelId, onClose, onRecord
             </div>
             <p className="text-[10px] text-muted">Balance after payment: <strong className="text-amber-900">{formatAmount(Math.max(0, balance - (Number(paymentAmount) || 0)), currency)}</strong></p>
             {paymentError && <p role="alert" className="border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] text-rose-800">{paymentError}</p>}
-            <div className="flex justify-end">
+            {confirmingPaid && (
+              <div className="border border-amber-200 bg-amber-50 p-3">
+                <p className="text-[10px] leading-4 text-amber-950">Confirm the bank transfer has been received before marking the remaining {formatAmount(balance, currency)} as paid.</p>
+                <div className="mt-3 flex justify-end gap-2">
+                  <button type="button" onClick={() => setConfirmingPaid(false)} disabled={savingPayment} className="border border-stone-300 px-3 py-2 text-[10px] font-semibold text-ink hover:bg-white disabled:opacity-60">Cancel</button>
+                  <button type="button" onClick={() => { void markBalancePaid() }} disabled={savingPayment || !reservation.id || !hotelId} className="bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-not-allowed disabled:opacity-60">{savingPayment ? 'SAVING…' : 'CONFIRM PAID'}</button>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => { setPaymentError(''); setConfirmingPaid(true) }} disabled={savingPayment || !reservation.id || !hotelId} className="border border-forest px-3 py-2 text-[10px] font-semibold text-forest hover:bg-forest hover:text-white disabled:cursor-not-allowed disabled:opacity-50">MARK AS PAID</button>
               <button type="submit" disabled={savingPayment} className="bg-forest px-3 py-2 text-[10px] font-semibold text-white hover:bg-forest-deep disabled:cursor-wait disabled:opacity-60">{savingPayment ? 'SAVING…' : 'RECORD PAYMENT'}</button>
             </div>
           </form>

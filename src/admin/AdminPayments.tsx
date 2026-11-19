@@ -12,11 +12,12 @@ import {
 } from './adminReservationsData'
 import type { PaymentStatus, Reservation } from './adminReservationsData'
 
-type PaymentFilter = 'All Payments' | 'Pending' | 'Partially Paid' | 'Paid'
+type PaymentFilter = 'All Payments' | 'Pending' | 'Pending Verification' | 'Partially Paid' | 'Paid'
 
 function paymentStatusClass(status: PaymentStatus) {
   if (status === 'Paid') return 'border-emerald-200 bg-emerald-50 text-emerald-800'
   if (status === 'Partially Paid') return 'border-amber-200 bg-amber-50 text-amber-900'
+  if (status === 'Pending Verification') return 'border-sky-200 bg-sky-50 text-sky-800'
   if (status === 'Refunded') return 'border-stone-200 bg-stone-100 text-stone-600'
   return 'border-rose-200 bg-rose-50 text-rose-800'
 }
@@ -146,7 +147,7 @@ export function AdminPayments() {
         </label>
         <label className="flex items-center gap-2 text-[9px] text-muted">PAYMENT STATUS
           <select className={selectClass} value={filter} onChange={(event) => setFilter(event.target.value as PaymentFilter)}>
-            {(['All Payments', 'Pending', 'Partially Paid', 'Paid'] as PaymentFilter[]).map((status) => <option key={status}>{status}</option>)}
+            {(['All Payments', 'Pending', 'Pending Verification', 'Partially Paid', 'Paid'] as PaymentFilter[]).map((status) => <option key={status}>{status}</option>)}
           </select>
         </label>
         <span className="text-[9px] text-muted">{filteredReservations.length} folios</span>

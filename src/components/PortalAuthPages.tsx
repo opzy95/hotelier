@@ -375,6 +375,11 @@ export function HotelAdminRegistrationPage() {
         name: value('hotel-name'),
         email: value('hotel-email'),
         phone: value('hotel-phone'),
+        bankDetails: {
+          bankName: value('hotel-bank-name'),
+          bankAccountNumber: value('hotel-bank-account-number'),
+          accountName: value('hotel-bank-account-name'),
+        },
         address: {
           line1: value('hotel-address-line1'),
           line2: value('hotel-address-line2'),
@@ -451,6 +456,15 @@ export function HotelAdminRegistrationPage() {
             </label>
             <label className="block text-[10px] font-semibold tracking-wide text-ink">HOTEL PHONE
               <input className={fieldClass} type="tel" name="hotel-phone" autoComplete="tel" placeholder="+234 801 234 5678" minLength={3} maxLength={40} required />
+            </label>
+            <label className="block text-[10px] font-semibold tracking-wide text-ink">BANK NAME
+              <input className={fieldClass} name="hotel-bank-name" autoComplete="organization" placeholder="Bank name" minLength={2} maxLength={100} required />
+            </label>
+            <label className="block text-[10px] font-semibold tracking-wide text-ink">BANK ACCOUNT NUMBER
+              <input className={fieldClass} type="text" name="hotel-bank-account-number" inputMode="numeric" autoComplete="off" placeholder="Account number" minLength={4} maxLength={34} required />
+            </label>
+            <label className="block text-[10px] font-semibold tracking-wide text-ink">BANK ACCOUNT NAME
+              <input className={fieldClass} name="hotel-bank-account-name" autoComplete="name" placeholder="Name on the account" minLength={2} maxLength={120} required />
             </label>
             <label className="block text-[10px] font-semibold tracking-wide text-ink">STREET ADDRESS
               <input className={fieldClass} name="hotel-address-line1" autoComplete="address-line1" placeholder="Street address" maxLength={120} required />

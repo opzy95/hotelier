@@ -1,4 +1,4 @@
-export type PaymentStatus = 'Paid' | 'Partially Paid' | 'Pending' | 'Refunded'
+export type PaymentStatus = 'Paid' | 'Partially Paid' | 'Pending' | 'Pending Verification' | 'Refunded'
 export type FolioStatus = 'Confirmed' | 'Checked In' | 'Pending Payment' | 'Cancelled' | 'Checked Out' | 'No Show'
 
 export type Reservation = {
@@ -17,6 +17,7 @@ export type Reservation = {
   assignedRoomId?: string
   assignedRoomName?: string
   source?: string
+  receiptUrl?: string
   registeredAt?: string
   checkIn: string
   checkOut: string

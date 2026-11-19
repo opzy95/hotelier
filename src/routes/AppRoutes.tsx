@@ -26,6 +26,7 @@ import { AdminCheckIn } from '../admin/AdminCheckIn'
 import { AdminPayments } from '../admin/AdminPayments'
 import { AdminReports } from '../admin/AdminReports'
 import { AdminStaff } from '../admin/AdminStaff'
+import { HotelSettingsPage } from '../admin/HotelSettings'
 import { useHotelSession } from '../admin/HotelSessionContext'
 import { SuperAdminDashboard } from '../admin/SuperAdminDashboard'
 import { EmailVerificationPage, HotelDashboardGate, HotelOnboardingPage } from '../components/HotelOnboardingPages'
@@ -144,6 +145,7 @@ export function AppRoutes() {
         <Route path="payments" element={<DashboardAccessRoute requiredPermissions={[]}><AdminPayments /></DashboardAccessRoute>} />
         <Route path="reports" element={<DashboardAccessRoute requiredPermissions={[]}><AdminReports /></DashboardAccessRoute>} />
         <Route path="staff" element={<DashboardAccessRoute requiredPermissions={[]}><AdminStaff /></DashboardAccessRoute>} />
+        <Route path="settings" element={<DashboardAccessRoute requiredPermissions={[]}><HotelSettingsPage /></DashboardAccessRoute>} />
         <Route path="not-authorized" element={<DashboardNotAuthorized />} />
         <Route path=":section" element={<AdminSectionPlaceholder />} />
       </Route>

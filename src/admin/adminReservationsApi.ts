@@ -177,6 +177,8 @@ function normalizeReservation(value: unknown): Reservation {
   const guests = nestedRecord(value, 'guests')
   const pricing = nestedRecord(value, 'pricing')
   const paymentSummary = nestedRecord(value, 'paymentSummary')
+  const receipt = isRecord(value.receipt) ? value.receipt : {}
+  const paymentReceipt = isRecord(value.paymentReceipt) ? value.paymentReceipt : {}
   const assignedRoom = isRecord(value.assignedRoom) ? value.assignedRoom : undefined
   const assignedRoomId = optionalRecordId(value.assignedRoom ?? value.assignedRoomId)
   const currency = stringField(pricing, 'currency')
@@ -194,6 +196,7 @@ function normalizeReservation(value: unknown): Reservation {
   }
   const paymentByStatus: Record<string, Reservation['payment']> = {
     unpaid: 'Pending',
+    pending_verification: 'Pending Verification',
     partially_paid: 'Partially Paid',
     paid: 'Paid',
     refunded: 'Refunded',
@@ -223,6 +226,14 @@ function normalizeReservation(value: unknown): Reservation {
     assignedRoomId,
     assignedRoomName: assignedRoom && typeof assignedRoom.code === 'string' ? assignedRoom.code : undefined,
     source,
+    receiptUrl: optionalStringField(value, 'receiptUrl')
+      ?? optionalStringField(value, 'receipt')
+      ?? optionalStringField(receipt, 'url')
+      ?? optionalStringField(receipt, 'secureUrl')
+      ?? optionalStringField(receipt, 'secure_url')
+      ?? optionalStringField(paymentReceipt, 'url')
+      ?? optionalStringField(paymentReceipt, 'secureUrl')
+      ?? optionalStringField(paymentReceipt, 'secure_url'),
     registeredAt: typeof value.createdAt === 'string' ? value.createdAt.slice(0, 10) : undefined,
     checkIn: stringField(value, 'checkIn'),
     checkOut,
