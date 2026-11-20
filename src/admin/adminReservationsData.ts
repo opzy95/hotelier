@@ -65,6 +65,10 @@ export function reservationBalanceDue(reservation: Reservation) {
   return Math.max(0, reservation.balanceDue ?? reservation.amount - reservationPaidAmount(reservation))
 }
 
+export function isOpenReservationFolio(reservation: Pick<Reservation, 'folio'>) {
+  return reservation.folio !== 'Cancelled' && reservation.folio !== 'No Show'
+}
+
 export function reservationCollectedAmount(reservations: Reservation[]) {
   return reservations.reduce((total, reservation) => (
     reservation.payment === 'Refunded' ? total : total + reservationPaidAmount(reservation)
@@ -73,7 +77,7 @@ export function reservationCollectedAmount(reservations: Reservation[]) {
 
 export function reservationOutstandingAmount(reservations: Reservation[]) {
   return reservations.reduce((total, reservation) => (
-    reservation.folio === 'Cancelled' || reservation.folio === 'No Show' || reservation.payment === 'Refunded'
+    !isOpenReservationFolio(reservation) || reservation.payment === 'Refunded'
       ? total
       : total + reservationBalanceDue(reservation)
   ), 0)

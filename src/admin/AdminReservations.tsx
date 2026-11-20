@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { useAdminReservations } from './AdminReservationsContext'
 import { useHotelSession } from './HotelSessionContext'
-import { currencyMinorUnitScale, reservationBalanceDue, reservationPaidAmount } from './adminReservationsData'
+import { currencyMinorUnitScale, isOpenReservationFolio, reservationBalanceDue, reservationPaidAmount } from './adminReservationsData'
 import type { FolioStatus, PaymentStatus, Reservation } from './adminReservationsData'
 import { createPaymentIdempotencyKey, createReservation as createReservationRequest, extendReservationStay, fetchReservationAvailability, fetchReservations, fetchReservationPayments, recordReservationPayment, updateReservationStatus } from './adminReservationsApi'
 import type { PaymentMethod, ReservationAvailability, ReservationDraft, ReservationPayment, ReservationPaymentRecord } from './adminReservationsApi'
@@ -837,7 +837,9 @@ export function AdminReservations() {
   const currentPage = Math.min(page, totalPages)
   const visibleRows = filteredRows
   const upcomingCount = rows.filter(isUpcomingReservation).length
-  const pendingReservations = rows.filter((row) => row.payment === 'Pending' || row.payment === 'Partially Paid')
+  const pendingReservations = rows.filter((row) => (
+    isOpenReservationFolio(row) && (row.payment === 'Pending' || row.payment === 'Partially Paid')
+  ))
   const cancelledCount = rows.filter((row) => row.folio === 'Cancelled').length
   const checkedInCount = rows.filter((row) => row.folio === 'Checked In').length
   const pendingAmount = pendingReservations.reduce((total, row) => total + reservationBalanceDue(row), 0)
@@ -1022,10 +1024,10 @@ export function AdminReservations() {
           <p className="mt-1 text-[10px] text-muted">Confirmed stays on this page</p>
         </article>
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
-          <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">PENDING ON PAGE</span>
+          <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">PENDING ON ACTIVE FOLIOS</span>
           <CircleAlert aria-hidden="true" className="absolute right-4 top-4 size-8 rounded-sm bg-amber-50 p-2 text-amber-700" />
           <strong className="mt-2 block font-display text-2xl text-ink">{pendingReservations.length}</strong>
-          <p className="mt-1 text-[10px] text-muted"><b className="font-semibold text-amber-800">{formatAmount(pendingAmount)}</b> outstanding on this page</p>
+          <p className="mt-1 text-[10px] text-muted"><b className="font-semibold text-amber-800">{formatAmount(pendingAmount)}</b> outstanding on active folios this page</p>
         </article>
         <article className="relative rounded-sm border border-stone-200/80 bg-white p-4 shadow-sm">
           <span className="text-[9px] font-semibold tracking-[0.12em] text-muted">CANCELLED ON PAGE</span>
@@ -1094,7 +1096,7 @@ export function AdminReservations() {
                   <td className="px-3 py-3"><span className="block max-w-[145px] text-ink">{reservation.room}</span><small className="mt-1 block text-[10px]">{roomDisplayName(reservation.assignedRoomId, rooms, reservation.assignedRoomName)}</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{shortDate(reservation.checkIn)} – {shortDate(reservation.checkOut)}</strong>{isUpcomingReservation(reservation) && <span className="mt-1 block w-fit border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold text-sky-800">Upcoming</span>}<small className="mt-1 block text-[10px]">{nightsBetween(reservation.checkIn, reservation.checkOut)} nights</small></td>
                   <td className="whitespace-nowrap px-3 py-3"><strong className="block font-medium text-ink">{reservation.adults} {reservation.adults === 1 ? 'Adult' : 'Adults'}</strong><small className="mt-1 block text-[10px]">{reservation.children} {reservation.children === 1 ? 'Child' : 'Children'}</small></td>
-                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{formatAmount(reservation.amount, reservation.currency)}</strong><small className="mt-1 block text-[10px]">{reservation.payment === 'Pending' ? 'Awaiting payment' : reservation.payment === 'Partially Paid' ? `Paid ${formatAmount(reservationPaidAmount(reservation), reservation.currency)} · Due ${formatAmount(reservationBalanceDue(reservation), reservation.currency)}` : 'Settlement recorded'}</small></td>
+                  <td className="whitespace-nowrap px-3 py-3"><strong className="font-medium text-ink">{formatAmount(reservation.amount, reservation.currency)}</strong><small className="mt-1 block text-[10px]">{!isOpenReservationFolio(reservation) ? 'No longer collectible' : reservation.payment === 'Pending' ? 'Awaiting payment' : reservation.payment === 'Partially Paid' ? `Paid ${formatAmount(reservationPaidAmount(reservation), reservation.currency)} · Due ${formatAmount(reservationBalanceDue(reservation), reservation.currency)}` : 'Settlement recorded'}</small></td>
                   <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-medium ${statusStyle(reservation.payment)}`}>{reservation.payment}</span></td>
                   <td className="px-3 py-3"><span className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-medium ${statusStyle(reservation.folio)}`}>{reservation.folio}</span></td>
                   <td className="px-3 py-3">
