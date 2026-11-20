@@ -32,6 +32,7 @@ import { SuperAdminDashboard } from '../admin/SuperAdminDashboard'
 import { EmailVerificationPage, HotelDashboardGate, HotelOnboardingPage, HotelSubscriptionPaymentCallbackPage } from '../components/HotelOnboardingPages'
 import { HotelAdminLoginPage, HotelAdminRegistrationPage, HotelForgotPasswordPage, HotelResetPasswordPage, StaffInvitationAcceptancePage, SuperAdminLoginPage } from '../components/PortalAuthPages'
 import { PublicHotelDetailsRoute, PublicHotelsPage } from '../components/PublicHotelsPage'
+import { PricingPage } from '../components/PricingPage'
 import { publicHotelsPath } from './publicBooking'
 
 function DashboardLandingRedirect() {
@@ -126,6 +127,7 @@ export function AppRoutes() {
       <Route element={<PublicLayout />}>
         <Route path="/" element={<HomePage />} />
         <Route path="/about" element={<AboutPage />} />
+        <Route path="/pricing" element={<PricingPage />} />
         <Route path="/rooms" element={<RoomsPage />} />
         <Route path="/experiences" element={<ExperiencesPage />} />
         <Route path="/bookings" element={<BookingsPage />} />

@@ -5,6 +5,7 @@ import { publicHotelsPath } from '../routes/publicBooking'
 
 const links = [
   { label: 'Home', href: '/' },
+  { label: 'Pricing', href: '/pricing' },
   { label: 'About', href: '/about' },
   { label: 'Rooms & Suites', href: '/rooms' },
   { label: 'Experiences', href: '/experiences' },
@@ -25,15 +26,18 @@ export function SiteHeader() {
         </Link>
 
         <nav aria-label="Main navigation" className="hidden items-center gap-7 lg:flex">
-          {links.map((link, index) => (
-            <Link
-              key={link.href}
-              to={link.href}
-              className={`border-b py-1 text-[11px] transition-colors hover:text-champagne ${((index === 0 && pathname === '/') || (index === 1 && pathname === '/about') || (index === 2 && pathname === '/rooms') || (index === 3 && pathname === '/experiences') || (index === 4 && pathname === '/contact') || (index === 5 && pathname === '/bookings')) ? 'border-champagne text-champagne' : 'border-transparent text-white/80'}`}
-            >
-              {link.label}
-            </Link>
-          ))}
+          {links.map((link) => {
+            const isActive = pathname === link.href
+            return (
+              <Link
+                key={link.href}
+                to={link.href}
+                className={`border-b py-1 text-[11px] transition-colors hover:text-champagne ${isActive ? 'border-champagne text-champagne' : 'border-transparent text-white/80'}`}
+              >
+                {link.label}
+              </Link>
+            )
+          })}
         </nav>
 
         <div className="hidden items-center gap-4 lg:flex">

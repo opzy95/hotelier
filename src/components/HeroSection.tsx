@@ -89,6 +89,9 @@ export function HeroSection() {
             <Link to={publicHotelsPath()} className="inline-flex min-h-11 items-center border border-white/40 px-6 text-[10px] font-semibold text-white transition-colors hover:border-champagne hover:text-champagne">
               EXPLORE STAYS
             </Link>
+            <Link to="/pricing" className="inline-flex min-h-11 items-center gap-1 px-2 text-[10px] font-semibold text-white/80 transition-colors hover:text-champagne">
+              VIEW PLANS <ArrowRight aria-hidden="true" className="h-3.5 w-3.5" />
+            </Link>
           </div>
         </div>
       </div>

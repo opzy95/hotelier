@@ -4,6 +4,8 @@ import { ArrowRight, Check, Hotel, LoaderCircle, ShieldCheck } from 'lucide-reac
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { ApiError, apiRequest } from '../api'
 import type { HotelOnboardingResponse, HotelSettings, PlatformProfileResponse } from '../api'
+import { fetchPublicPlans, formatPlanPrice, getPublicPlanOptions } from '../api/publicPlans'
+import type { PublicPlan, PublicPlanOption } from '../api/publicPlans'
 import { HotelSessionProvider } from '../admin/HotelSessionContext'
 import type { HotelSessionIdentity } from '../admin/HotelSessionContext'
 
@@ -36,31 +38,6 @@ function Notice({ children, tone = 'error' }: { children: ReactNode; tone?: 'err
     ? 'border-emerald-200 bg-emerald-50 text-emerald-950'
     : 'border-rose-200 bg-rose-50 text-rose-950'
   return <p role="status" className={`mt-4 border px-3 py-2.5 text-xs leading-5 ${styles}`}>{children}</p>
-}
-
-type OnboardingPlan = {
-  id: string
-  code: string
-  name: string
-  description: string
-  trialDays: number
-  features: string[]
-  prices: {
-    amount: number
-    currency: string
-    billingInterval: string
-  }[]
-}
-
-type OnboardingPlanOption = {
-  key: string
-  id: string
-  code: string
-  name: string
-  description: string
-  trialDays: number
-  features: string[]
-  price?: OnboardingPlan['prices'][number]
 }
 
 export function EmailVerificationPage() {
@@ -241,117 +218,6 @@ export function HotelSubscriptionPaymentCallbackPage() {
   )
 }
 
-function formatPlanPrice(price: OnboardingPlan['prices'][number]) {
-  const fractionDigits = new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: price.currency,
-  }).resolvedOptions().maximumFractionDigits ?? 2
-  const formattedPrice = new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency: price.currency,
-    maximumFractionDigits: 2,
-  }).format(price.amount / (10 ** fractionDigits))
-  const months = Number(price.billingInterval.match(/^\d+/)?.[0])
-  const interval = Number.isFinite(months)
-    ? `${months} ${months === 1 ? 'month' : 'months'}`
-    : price.billingInterval.replace(/_/g, ' ')
-  return `${formattedPrice} / ${interval}`
-}
-
-function isPlanDefinition(value: unknown): value is {
-  id: string
-  code: string
-  name: string
-  description: string
-  trial_days: number
-  sort_order: number
-  features: Record<string, boolean>
-} {
-  if (typeof value !== 'object' || value === null) return false
-  if (!('id' in value) || !('code' in value) || !('name' in value) || !('description' in value) || !('trial_days' in value) || !('sort_order' in value) || !('features' in value)) return false
-  if (typeof value.features !== 'object' || value.features === null || Array.isArray(value.features)) return false
-
-  return typeof value.id === 'string'
-    && value.id.length > 0
-    && typeof value.code === 'string'
-    && typeof value.name === 'string'
-    && typeof value.description === 'string'
-    && typeof value.trial_days === 'number'
-    && Number.isFinite(value.trial_days)
-    && typeof value.sort_order === 'number'
-    && Number.isFinite(value.sort_order)
-    && Object.values(value.features).every((feature) => typeof feature === 'boolean')
-}
-
-function isPlanPrice(value: unknown): value is {
-  plan_code: string
-  billing_interval: string
-  amount: number
-  currency: string
-} {
-  if (typeof value !== 'object' || value === null) return false
-  if (!('plan_code' in value) || !('billing_interval' in value) || !('amount' in value) || !('currency' in value)) return false
-
-  return typeof value.plan_code === 'string'
-    && typeof value.billing_interval === 'string'
-    && typeof value.amount === 'number'
-    && Number.isFinite(value.amount)
-    && typeof value.currency === 'string'
-}
-
-function getPublicPlans(payload: unknown): OnboardingPlan[] {
-  if (typeof payload !== 'object' || payload === null || !('plans' in payload) || !Array.isArray(payload.plans) || !('plan_prices' in payload) || !Array.isArray(payload.plan_prices)) {
-    throw new Error('The hotel API returned an invalid plans response.')
-  }
-  if (!payload.plans.every(isPlanDefinition) || !payload.plan_prices.every(isPlanPrice)) {
-    throw new Error('The hotel API returned an invalid plans response.')
-  }
-
-  const pricesByPlan = new Map<string, OnboardingPlan['prices']>()
-  for (const price of payload.plan_prices) {
-    const prices = pricesByPlan.get(price.plan_code) ?? []
-    prices.push({
-      amount: price.amount,
-      currency: price.currency,
-      billingInterval: price.billing_interval,
-    })
-    pricesByPlan.set(price.plan_code, prices)
-  }
-
-  return [...payload.plans]
-    .sort((left, right) => left.sort_order - right.sort_order)
-    .map((plan) => ({
-      id: plan.id,
-      code: plan.code,
-      name: plan.name,
-      description: plan.description,
-      trialDays: plan.trial_days,
-      features: Object.entries(plan.features)
-        .filter(([, enabled]) => enabled)
-        .map(([feature]) => feature.replace(/_/g, ' ')),
-      prices: pricesByPlan.get(plan.code) ?? [],
-    }))
-}
-
-function getPlanOptions(plans: OnboardingPlan[]): OnboardingPlanOption[] {
-  return plans.flatMap((plan) => {
-    const options = plan.prices.length > 0
-      ? [...plan.prices].sort((left, right) => Number(right.billingInterval.match(/^\d+/)?.[0] ?? 0) - Number(left.billingInterval.match(/^\d+/)?.[0] ?? 0))
-      : [undefined]
-
-    return options.map((price) => ({
-      key: `${plan.code}-${price?.billingInterval ?? 'trial'}`,
-      id: plan.id,
-      code: plan.code,
-      name: plan.name,
-      description: plan.description,
-      trialDays: plan.trialDays,
-      features: plan.features,
-      price,
-    }))
-  })
-}
-
 function LoadingPanel() {
   return (
     <div className="flex items-center gap-3 py-10 text-sm text-muted" role="status">
@@ -429,7 +295,7 @@ export function HotelOnboardingPage() {
   const navigate = useNavigate()
   const [hotelId] = useState(() => sessionStorage.getItem('selectedHotelId') ?? '')
   const [onboarding, setOnboarding] = useState<HotelOnboardingResponse | null>(null)
-  const [plans, setPlans] = useState<OnboardingPlan[]>([])
+  const [plans, setPlans] = useState<PublicPlan[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -456,8 +322,7 @@ export function HotelOnboardingPage() {
         if (cancelled) return
         setOnboarding(current)
         if (current.currentStep === 'choose_plan') {
-          const result = await apiRequest<unknown>('/public/plans')
-          const availablePlans = getPublicPlans(result)
+          const availablePlans = await fetchPublicPlans()
           if (!cancelled) setPlans(availablePlans)
         }
       } catch (requestError) {
@@ -508,7 +373,7 @@ export function HotelOnboardingPage() {
     }
   }
 
-  async function selectPlan(option: OnboardingPlanOption) {
+  async function selectPlan(option: PublicPlanOption) {
     setSaving(true)
     setError('')
     try {
@@ -574,7 +439,7 @@ export function HotelOnboardingPage() {
   if (!hotelId) return <Navigate to="/hotel/login" replace />
   if (onboarding?.currentStep === 'complete' && !loading) return <Navigate to="/dashboard/overview" replace />
 
-  const planOptions = getPlanOptions(plans)
+  const planOptions = getPublicPlanOptions(plans)
 
   return (
     <OnboardingFrame wide eyebrow="HOTEL SETUP" title="Let’s prepare your hotel" description="Choose a subscription and configure the essential settings before opening your hotel workspace.">
