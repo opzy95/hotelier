@@ -21,7 +21,7 @@ export function SiteHeader() {
       <div className="mx-auto flex h-[62px] max-w-[1440px] items-center justify-between px-5 sm:px-8 lg:px-10">
         <Link to="/" className="flex shrink-0 items-center gap-2.5 text-[13px] font-medium text-white">
           <Sparkles aria-hidden="true" className="h-4 w-4 text-champagne" />
-          <span className="font-display text-[15px]">OPZY LUXURY HOTEL</span>
+          <span className="font-display text-[15px]">OPZY HOSPITALITY</span>
         </Link>
 
         <nav aria-label="Main navigation" className="hidden items-center gap-7 lg:flex">

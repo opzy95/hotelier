@@ -177,8 +177,8 @@ export function SiteFooter() {
     <footer id="contact" className="border-t-[5px] border-[#e7e1d5] bg-forest-deep px-5 pb-5 pt-10 text-white sm:px-8 sm:pt-12 lg:px-10">
       <div className="mx-auto grid max-w-[1280px] gap-9 sm:grid-cols-2 lg:grid-cols-[1.2fr_0.8fr_1fr] lg:gap-16">
         <div>
-          <a href="#home" className="font-display text-[22px]">OPZY LUXURY HOTEL</a>
-          <p className="mt-3 max-w-[360px] text-[10px] leading-[1.8] text-white/45">An architectural waterfront sanctuary situated on Victoria Island, Lagos. Guided by discretion, bespoke concierge excellence, and effortless hospitality.</p>
+          <a href="#home" className="font-display text-[22px]">OPZY HOSPITALITY</a>
+          <p className="mt-3 max-w-[360px] text-[10px] leading-[1.8] text-white/45">The all-in-one platform for hotels and short-lets to manage rooms, reservations, payments and teams—and welcome guests through a direct booking link.</p>
           <div className="mt-4 flex gap-4 text-[9px] font-medium text-white/70">
             <a href="#contact" className="hover:text-champagne">IG</a><span>/</span><a href="#contact" className="hover:text-champagne">LN</a><span>/</span><a href="#contact" className="hover:text-champagne">FB</a>
           </div>
@@ -206,7 +206,7 @@ export function SiteFooter() {
         </div>
       </div>
       <div className="mx-auto mt-10 flex max-w-[1280px] flex-col gap-3 border-t border-white/10 pt-4 text-[9px] text-white/40 sm:flex-row sm:items-center sm:justify-between">
-        <p>© 2025 OPZY LUXURY HOTEL. Victoria Island, Lagos. All Rights Reserved.</p>
+        <p>© OPZY HOSPITALITY. All Rights Reserved.</p>
         <div className="flex flex-wrap items-center gap-3 sm:gap-5">
           <a href="#contact" className="hover:text-champagne">Privacy Policy</a><span>•</span><a href="#contact" className="hover:text-champagne">Discreet Hospitality Charter</a><span>•</span><span className="text-champagne">Member of The Leading Hotels of the World</span>
         </div>
